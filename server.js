@@ -199,19 +199,10 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    const normalizedFromPhone = fromPhone.replace(/\D/g, '');
-    const normalizedBusinessPhone = BUSINESS_PHONE.replace(/\D/g, '');
-    
-    if (normalizedFromPhone === normalizedBusinessPhone) {
-      console.log('Ignoring message from NammaHood (business number)');
-      res.sendStatus(200);
-      return;
-    }
-
-    // Add to OneDrive
+    // Add to OneDrive (extracts customer name/phone from message, not from sender)
     await addToOneDrive(messageBody);
 
-    // Send confirmation
+    // Send confirmation (send to whoever sent the message)
     await sendConfirmation(fromPhone);
 
     res.sendStatus(200);
