@@ -37,7 +37,7 @@ For TENANTS:
   "type": "tenant",
   "name": "person's name or null",
   "phone": "phone number or null",
-  "configuration": "1BHK or 2BHK or 3BHK (SINGLE VALUE ONLY)",
+  "configuration": "1 BHK or 2 BHK or 3 BHK or 4 BHK or 5 BHK (SINGLE VALUE ONLY, with space)",
   "furnishing": "Furnished or Semi-Furnished or Unfurnished (SINGLE VALUE)",
   "locations": ["location1", "location2"],
   "budget_min": number or null,
@@ -55,7 +55,7 @@ For OWNERS:
   "type": "owner",
   "name": "owner's name or null",
   "phone": "phone number or null",
-  "configuration": "1BHK or 2BHK or 3BHK (SINGLE VALUE ONLY)",
+  "configuration": "1 BHK or 2 BHK or 3 BHK or 4 BHK or 5 BHK (SINGLE VALUE ONLY, with space)",
   "furnishing": "Furnished or Semi-Furnished or Unfurnished (SINGLE VALUE)",
   "location": "property location or null",
   "rental": number or null,
@@ -72,8 +72,9 @@ For OWNERS:
 CRITICAL RULES:
 - Extract phone numbers EXACTLY as they appear
 - For budget/rental/deposit/maintenance, extract as integers (remove 'k', rupee symbol, etc)
-- For configuration, furnishing, parking, occupancy_type: extract ONLY ONE value (not multiple, not comma-separated)
-- If multiple values mentioned (e.g. "2BHK or 3BHK"), pick the FIRST one mentioned
+- For configuration, ALWAYS use format "X BHK" with a SPACE between number and BHK (e.g., "1 BHK" NOT "1BHK")
+- For furnishing, parking, occupancy_type: extract ONLY ONE value (not multiple, not comma-separated)
+- If multiple values mentioned (e.g. "2 BHK or 3 BHK"), pick the FIRST one mentioned
 - If information is missing, use null
 - Return ONLY the JSON object, nothing else
 - Always use confidence 0.8 or higher`;
@@ -256,16 +257,15 @@ app.post('/webhook', async (req, res) => {
     console.log(`✅ Confidence: ${extractedData.confidence}`);
     console.log(`✅ Type: ${extractedData.type}`);
 
-    console.log('🔍 Step 2: Checking for duplicates...');
-    const isDuplicate = await checkDuplicate(extractedData.type, fromPhone, extractedData.name);
-    
-    if (isDuplicate) {
-      console.log(`⚠️ Duplicate entry detected for ${extractedData.name}. Skipping.`);
-      res.sendStatus(200);
-      return;
-    }
-
-    console.log('✅ No duplicate found.');
+    // Skip duplicate check due to API permission issues
+    // console.log('🔍 Step 2: Checking for duplicates...');
+    // const isDuplicate = await checkDuplicate(extractedData.type, fromPhone, extractedData.name);
+    // if (isDuplicate) {
+    //   console.log(`⚠️ Duplicate entry detected for ${extractedData.name}. Skipping.`);
+    //   res.sendStatus(200);
+    //   return;
+    // }
+    console.log('⏭️ Step 2: Skipping duplicate check (API permissions)');
     console.log('🔍 Step 3: Adding to Airtable...');
     const recordId = await addToAirtable(extractedData.type, extractedData);
     console.log(`✅ Record added to Airtable: ${recordId}`);
