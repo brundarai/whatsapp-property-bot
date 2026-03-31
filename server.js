@@ -21,7 +21,7 @@ const EXCEL_FILE = path.join('/tmp', 'property_data.xlsx');
 function parseMessage(message) {
   const data = {
     name: extractValue(message, ['Name', '1.']),
-    phone: extractValue(message, ['WhatsApp / Contact Number', '2.']),
+    phone: extractValue(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
     requirement: extractValue(message, ['Requirement', '3.']),
     configuration: extractValue(message, ['Configuration', '4.']),
     furnishing: extractValue(message, ['Furnishing', '5.']),
@@ -31,7 +31,6 @@ function parseMessage(message) {
     moveInDate: extractValue(message, ['Move-in Date', '9.']),
     parking: extractValue(message, ['Parking', '10.']),
     foodPref: extractValue(message, ['Food Preference', '11.']),
-    fullMessage: message
   };
   return data;
 }
@@ -62,9 +61,11 @@ async function getOrCreateWorkbook() {
   } else {
     workbook = new ExcelJS.Workbook();
     
-    const sheet = workbook.addWorksheet('Property Inquiries');
+    // Create single master sheet
+    const sheet = workbook.addWorksheet('Master Data');
     sheet.columns = [
       { header: 'Date', key: 'date', width: 12 },
+      { header: 'Type', key: 'type', width: 10 }, // Owner or Tenant
       { header: 'Name', key: 'name', width: 15 },
       { header: 'Phone', key: 'phone', width: 15 },
       { header: 'Requirement', key: 'requirement', width: 12 },
@@ -74,9 +75,12 @@ async function getOrCreateWorkbook() {
       { header: 'Tenant Type', key: 'tenantType', width: 12 },
       { header: 'Budget', key: 'budget', width: 15 },
       { header: 'Move-in Date', key: 'moveInDate', width: 15 },
-      { header: 'Parking Required', key: 'parking', width: 12 },
+      { header: 'Parking', key: 'parking', width: 12 },
       { header: 'Food Preference', key: 'foodPref', width: 12 },
+      { header: 'Notes', key: 'notes', width: 20 },
     ];
+    
+    // Format header
     sheet.getRow(1).font = { bold: true };
     sheet.getRow(1).fill = {
       type: 'pattern',
@@ -93,18 +97,23 @@ async function getOrCreateWorkbook() {
 /**
  * Add record to Excel
  */
-async function addToExcel(name, phone, message) {
+async function addToExcel(senderPhone, message) {
   try {
     const workbook = await getOrCreateWorkbook();
-    const worksheet = workbook.getWorksheet('Property Inquiries');
+    const worksheet = workbook.getWorksheet('Master Data');
     
     // Parse message to extract data
     const parsedData = parseMessage(message);
     
+    // Get name and phone from parsed data (not from sender)
+    const customerName = parsedData.name || 'Unknown';
+    const customerPhone = parsedData.phone || senderPhone;
+    
     const row = {
       date: new Date().toLocaleDateString('en-IN'),
-      name: name || parsedData.name || 'Unknown',
-      phone: phone || parsedData.phone || '',
+      type: '', // Empty - you'll fill this manually
+      name: customerName,
+      phone: customerPhone,
       requirement: parsedData.requirement,
       configuration: parsedData.configuration,
       furnishing: parsedData.furnishing,
@@ -114,12 +123,13 @@ async function addToExcel(name, phone, message) {
       moveInDate: parsedData.moveInDate,
       parking: parsedData.parking,
       foodPref: parsedData.foodPref,
+      notes: '',
     };
     
     worksheet.addRow(row);
     await workbook.xlsx.writeFile(EXCEL_FILE);
     
-    console.log(`✅ Record added to Excel`);
+    console.log(`✅ Record added to Master Sheet`);
     return true;
   } catch (error) {
     console.error('Error adding to Excel:', error);
@@ -130,8 +140,8 @@ async function addToExcel(name, phone, message) {
 /**
  * Send WhatsApp message confirmation
  */
-async function sendConfirmation(toPhone, message) {
-  const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour message has been saved.\n\nWe'll get back to you soon!`;
+async function sendConfirmation(toPhone) {
+  const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour information has been saved.\n\nWe'll get back to you soon!`;
 
   try {
     // Remove 'whatsapp:' prefix if it exists in TWILIO_PHONE
@@ -162,17 +172,24 @@ app.post('/webhook', async (req, res) => {
   console.log(`\n📨 New message from ${senderName} (${fromPhone}):\n${messageBody}\n`);
 
   try {
-    // Skip if message is too short (not a real inquiry)
+    // Skip if message is too short
     if (!messageBody || messageBody.trim().length < 5) {
       res.sendStatus(200);
       return;
     }
 
-    // Save to Excel with parsed data
-    await addToExcel(senderName, fromPhone, messageBody);
+    // Skip if it's from NammaHood (your business number)
+    if (fromPhone === '919380729579' || fromPhone === '+919380729579') {
+      console.log('Ignoring message from NammaHood (business number)');
+      res.sendStatus(200);
+      return;
+    }
+
+    // Save to Excel
+    await addToExcel(fromPhone, messageBody);
 
     // Send confirmation
-    await sendConfirmation(fromPhone, messageBody);
+    await sendConfirmation(fromPhone);
 
     res.sendStatus(200);
   } catch (error) {
