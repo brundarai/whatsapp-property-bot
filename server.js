@@ -18,70 +18,7 @@ const anthropic = new Anthropic({
 });
 
 const TWILIO_PHONE = process.env.TWILIO_PHONE_NUMBER;
-
-// Excel file paths
-const TENANTS_FILE = path.join(__dirname, 'tenants.xlsx');
-const OWNERS_FILE = path.join(__dirname, 'owners.xlsx');
-
-/**
- * Initialize Excel files with headers
- */
-async function initializeExcelFiles() {
-  // Initialize Tenants file
-  if (!fs.existsSync(TENANTS_FILE)) {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Tenants');
-    sheet.columns = [
-      { header: 'Phone', key: 'phone', width: 15 },
-      { header: 'Name', key: 'name', width: 20 },
-      { header: 'Configuration', key: 'configuration', width: 12 },
-      { header: 'Furnishing', key: 'furnishing', width: 15 },
-      { header: 'Locations', key: 'locations', width: 25 },
-      { header: 'Budget Min', key: 'budget_min', width: 12 },
-      { header: 'Budget Max', key: 'budget_max', width: 12 },
-      { header: 'Tenant Type', key: 'tenant_type', width: 12 },
-      { header: 'Move-in Date', key: 'move_in_date', width: 15 },
-      { header: 'Parking Needed', key: 'parking_needed', width: 12 },
-      { header: 'Pets', key: 'pets', width: 10 },
-      { header: 'Special Requirements', key: 'special_requirements', width: 25 },
-      { header: 'Confidence', key: 'confidence', width: 10 },
-      { header: 'Date Added', key: 'date_added', width: 15 },
-    ];
-    // Style header row
-    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
-    await workbook.xlsx.writeFile(TENANTS_FILE);
-    console.log('✅ Tenants Excel file created');
-  }
-
-  // Initialize Owners file
-  if (!fs.existsSync(OWNERS_FILE)) {
-    const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Owners');
-    sheet.columns = [
-      { header: 'Phone', key: 'phone', width: 15 },
-      { header: 'Name', key: 'name', width: 20 },
-      { header: 'Configuration', key: 'configuration', width: 12 },
-      { header: 'Furnishing', key: 'furnishing', width: 15 },
-      { header: 'Location', key: 'location', width: 25 },
-      { header: 'Rental', key: 'rental', width: 10 },
-      { header: 'Deposit', key: 'deposit', width: 10 },
-      { header: 'Maintenance', key: 'maintenance', width: 12 },
-      { header: 'Parking', key: 'parking', width: 12 },
-      { header: 'Pets Allowed', key: 'pets_allowed', width: 12 },
-      { header: 'Move-in Date', key: 'move_in_date', width: 15 },
-      { header: 'Occupancy Type', key: 'occupancy_type', width: 15 },
-      { header: 'Special Restrictions', key: 'special_restrictions', width: 25 },
-      { header: 'Confidence', key: 'confidence', width: 10 },
-      { header: 'Date Added', key: 'date_added', width: 15 },
-    ];
-    // Style header row
-    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70AD47' } };
-    await workbook.xlsx.writeFile(OWNERS_FILE);
-    console.log('✅ Owners Excel file created');
-  }
-}
+const EXCEL_FILE = path.join('/tmp', 'property_data.xlsx');
 
 /**
  * Extract tenant/owner info using Claude AI
@@ -95,12 +32,12 @@ For TENANTS:
   "type": "tenant",
   "name": "person's name or null",
   "phone": "phone number or null",
-  "configuration": "1 BHK or 2 BHK or 3 BHK or 4 BHK or 5 BHK (SINGLE VALUE ONLY, with space)",
-  "furnishing": "Furnished or Semi Furnished or Unfurnished (SINGLE VALUE, use space not hyphen)",
+  "configuration": "1BHK, 2BHK, 3BHK etc or null",
+  "furnishing": "Furnished, Semi-Furnished, Unfurnished or null",
   "locations": ["location1", "location2"],
   "budget_min": number or null,
   "budget_max": number or null,
-  "tenant_type": "Bachelor or Family or Student (SINGLE VALUE)",
+  "tenant_type": "Bachelor, Family, Student etc or null",
   "move_in_date": "date or null",
   "parking_needed": true/false or null,
   "pets": true/false or null,
@@ -113,26 +50,23 @@ For OWNERS:
   "type": "owner",
   "name": "owner's name or null",
   "phone": "phone number or null",
-  "configuration": "1 BHK or 2 BHK or 3 BHK or 4 BHK or 5 BHK (SINGLE VALUE ONLY, with space)",
-  "furnishing": "Furnished or Semi Furnished or Unfurnished (SINGLE VALUE, use space not hyphen)",
+  "configuration": "1BHK, 2BHK, 3BHK etc or null",
+  "furnishing": "Furnished, Semi-Furnished, Unfurnished or null",
   "location": "property location or null",
   "rental": number or null,
   "deposit": number or null,
   "maintenance": number or null,
-  "parking": "2-wheeler or Car or Both or None (SINGLE VALUE)",
+  "parking": "2-wheeler, Car, Both, None or null",
   "pets_allowed": true/false or null,
   "move_in_date": "date or null",
-  "occupancy_type": "Bachelor or Family or Any (SINGLE VALUE)",
+  "occupancy_type": "Bachelor, Family, Any etc or null",
   "special_restrictions": "string or null",
   "confidence": 0.8
 }
 
-CRITICAL RULES:
+RULES:
 - Extract phone numbers EXACTLY as they appear
-- For budget/rental/deposit/maintenance, extract as integers (remove 'k', rupee symbol, etc)
-- For configuration, ALWAYS use format "X BHK" with a SPACE between number and BHK (e.g., "1 BHK" NOT "1BHK")
-- For furnishing, parking, occupancy_type: extract ONLY ONE value (not multiple, not comma-separated)
-- If multiple values mentioned (e.g. "2 BHK or 3 BHK"), pick the FIRST one mentioned
+- For budget, extract as integers (remove 'k', rupee symbol, etc)
 - If information is missing, use null
 - Return ONLY the JSON object, nothing else
 - Always use confidence 0.8 or higher`;
@@ -144,7 +78,7 @@ Message: ${messageText}`;
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-3-haiku-20250307',
       max_tokens: 1000,
       system: systemPrompt,
       messages: [
@@ -161,65 +95,113 @@ Message: ${messageText}`;
     
     return extractedData;
   } catch (error) {
-    console.error('Error extracting info:', error.message);
+    console.error('Error extracting info:', error);
     return null;
   }
 }
 
 /**
- * Add record to Excel file
+ * Initialize or get Excel workbook
+ */
+async function getOrCreateWorkbook() {
+  let workbook;
+  
+  if (fs.existsSync(EXCEL_FILE)) {
+    workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(EXCEL_FILE);
+  } else {
+    workbook = new ExcelJS.Workbook();
+    
+    // Create Tenants sheet
+    const tenantsSheet = workbook.addWorksheet('Tenants');
+    tenantsSheet.columns = [
+      { header: 'Name', key: 'name', width: 15 },
+      { header: 'Phone', key: 'phone', width: 15 },
+      { header: 'Configuration', key: 'configuration', width: 12 },
+      { header: 'Furnishing', key: 'furnishing', width: 12 },
+      { header: 'Locations', key: 'locations', width: 20 },
+      { header: 'Budget Min', key: 'budget_min', width: 12 },
+      { header: 'Budget Max', key: 'budget_max', width: 12 },
+      { header: 'Tenant Type', key: 'tenant_type', width: 12 },
+      { header: 'Move In Date', key: 'move_in_date', width: 12 },
+      { header: 'Parking Needed', key: 'parking_needed', width: 12 },
+      { header: 'Pets', key: 'pets', width: 10 },
+      { header: 'Special Requirements', key: 'special_requirements', width: 25 },
+      { header: 'Date Added', key: 'date_added', width: 15 },
+    ];
+    tenantsSheet.getRow(1).font = { bold: true };
+    
+    // Create Owners sheet
+    const ownersSheet = workbook.addWorksheet('Owners');
+    ownersSheet.columns = [
+      { header: 'Name', key: 'name', width: 15 },
+      { header: 'Phone', key: 'phone', width: 15 },
+      { header: 'Configuration', key: 'configuration', width: 12 },
+      { header: 'Furnishing', key: 'furnishing', width: 12 },
+      { header: 'Location', key: 'location', width: 20 },
+      { header: 'Rental', key: 'rental', width: 12 },
+      { header: 'Deposit', key: 'deposit', width: 12 },
+      { header: 'Maintenance', key: 'maintenance', width: 12 },
+      { header: 'Parking', key: 'parking', width: 12 },
+      { header: 'Pets Allowed', key: 'pets_allowed', width: 12 },
+      { header: 'Move In Date', key: 'move_in_date', width: 12 },
+      { header: 'Occupancy Type', key: 'occupancy_type', width: 12 },
+      { header: 'Special Restrictions', key: 'special_restrictions', width: 25 },
+      { header: 'Date Added', key: 'date_added', width: 15 },
+    ];
+    ownersSheet.getRow(1).font = { bold: true };
+    
+    await workbook.xlsx.writeFile(EXCEL_FILE);
+  }
+  
+  return workbook;
+}
+
+/**
+ * Add record to Excel
  */
 async function addToExcel(type, data) {
-  const filePath = type === 'tenant' ? TENANTS_FILE : OWNERS_FILE;
-  
   try {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(filePath);
-    const sheet = workbook.worksheets[0];
+    const workbook = await getOrCreateWorkbook();
+    const sheetName = type === 'tenant' ? 'Tenants' : 'Owners';
+    const worksheet = workbook.getWorksheet(sheetName);
     
-    // Prepare row data
-    const rowData = {
+    const row = {
+      name: data.name || 'Unknown',
       phone: data.phone || '',
-      name: data.name || '',
-      date_added: new Date().toLocaleString(),
+      configuration: data.configuration || '',
+      furnishing: data.furnishing || '',
+      date_added: new Date().toLocaleDateString('en-IN'),
     };
-
+    
     if (type === 'tenant') {
-      rowData.configuration = data.configuration || '';
-      rowData.furnishing = data.furnishing || '';
-      rowData.locations = (data.locations && data.locations.length > 0) ? data.locations.join(', ') : '';
-      rowData.budget_min = data.budget_min || '';
-      rowData.budget_max = data.budget_max || '';
-      rowData.tenant_type = data.tenant_type || '';
-      rowData.move_in_date = data.move_in_date || '';
-      rowData.parking_needed = data.parking_needed ? 'Yes' : (data.parking_needed === false ? 'No' : '');
-      rowData.pets = data.pets ? 'Yes' : (data.pets === false ? 'No' : '');
-      rowData.special_requirements = data.special_requirements || '';
+      row.locations = (data.locations || []).join(', ');
+      row.budget_min = data.budget_min || '';
+      row.budget_max = data.budget_max || '';
+      row.tenant_type = data.tenant_type || '';
+      row.move_in_date = data.move_in_date || '';
+      row.parking_needed = data.parking_needed ? 'Yes' : 'No';
+      row.pets = data.pets ? 'Yes' : 'No';
+      row.special_requirements = data.special_requirements || '';
     } else {
-      rowData.configuration = data.configuration || '';
-      rowData.furnishing = data.furnishing || '';
-      rowData.location = data.location || '';
-      rowData.rental = data.rental || '';
-      rowData.deposit = data.deposit || '';
-      rowData.maintenance = data.maintenance || '';
-      rowData.parking = data.parking || '';
-      rowData.pets_allowed = data.pets_allowed ? 'Yes' : (data.pets_allowed === false ? 'No' : '');
-      rowData.move_in_date = data.move_in_date || '';
-      rowData.occupancy_type = data.occupancy_type || '';
-      rowData.special_restrictions = data.special_restrictions || '';
+      row.location = data.location || '';
+      row.rental = data.rental || '';
+      row.deposit = data.deposit || '';
+      row.maintenance = data.maintenance || '';
+      row.parking = data.parking || '';
+      row.pets_allowed = data.pets_allowed ? 'Yes' : 'No';
+      row.move_in_date = data.move_in_date || '';
+      row.occupancy_type = data.occupancy_type || '';
+      row.special_restrictions = data.special_restrictions || '';
     }
-
-    rowData.confidence = data.confidence || 0;
-
-    // Add row to sheet
-    sheet.addRow(rowData);
-
-    // Save file
-    await workbook.xlsx.writeFile(filePath);
-    console.log(`✅ Record added to Excel: ${type}`);
+    
+    worksheet.addRow(row);
+    await workbook.xlsx.writeFile(EXCEL_FILE);
+    
+    console.log(`✅ Record added to Excel: ${sheetName}`);
     return true;
   } catch (error) {
-    console.error('Error adding to Excel:', error.message);
+    console.error('Error adding to Excel:', error);
     throw error;
   }
 }
@@ -238,9 +220,9 @@ async function sendConfirmation(toPhone, type, name, details) {
       to: `whatsapp:${toPhone}`,
       body: message,
     });
-    console.log(`✅ Confirmation sent to ${toPhone}`);
+    console.log(`Confirmation sent to ${toPhone}`);
   } catch (error) {
-    console.error('Error sending confirmation:', error.message);
+    console.error('Error sending confirmation:', error);
   }
 }
 
@@ -255,38 +237,22 @@ app.post('/webhook', async (req, res) => {
   console.log(`\n📨 New message from ${senderName} (${fromPhone}):\n${messageBody}\n`);
 
   try {
-    console.log('🔍 Step 1: Extracting data with Claude...');
     const extractedData = await extractPropertyInfo(messageBody, fromPhone, senderName);
     console.log('Extracted data:', JSON.stringify(extractedData, null, 2));
 
-    if (!extractedData) {
-      console.log('❌ No data extracted (extractedData is null). Skipping.');
+    if (!extractedData || extractedData.confidence < 0.5) {
+      console.log('Low confidence or invalid data. Skipping.');
       res.sendStatus(200);
       return;
     }
 
-    if (extractedData.confidence < 0.5) {
-      console.log(`⚠️ Low confidence (${extractedData.confidence}). Skipping.`);
-      res.sendStatus(200);
-      return;
-    }
-
-    console.log(`✅ Confidence: ${extractedData.confidence}`);
-    console.log(`✅ Type: ${extractedData.type}`);
-
-    console.log('⏭️ Step 2: Skipping duplicate check');
-    console.log('🔍 Step 3: Adding to Excel...');
     await addToExcel(extractedData.type, extractedData);
-    console.log(`✅ Record saved to Excel!`);
 
-    console.log('🔍 Step 4: Sending WhatsApp confirmation...');
     await sendConfirmation(fromPhone, extractedData.type, extractedData.name || senderName, extractedData);
-    console.log(`✅ Confirmation sent to ${fromPhone}`);
 
     res.sendStatus(200);
   } catch (error) {
-    console.error('❌ Error processing message:', error.message);
-    console.error('Full error:', error);
+    console.error('Error processing message:', error);
     res.sendStatus(500);
   }
 });
@@ -298,18 +264,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'Bot is running!' });
 });
 
-// Initialize Excel files and start server
-async function startServer() {
-  try {
-    await initializeExcelFiles();
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      console.log(`🚀 WhatsApp bot listening on port ${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
+/**
+ * Download Excel file endpoint
+ */
+app.get('/download-excel', (req, res) => {
+  if (fs.existsSync(EXCEL_FILE)) {
+    res.download(EXCEL_FILE, 'property_data.xlsx');
+  } else {
+    res.status(404).json({ error: 'No data file found yet' });
   }
-}
+});
 
-startServer();
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 WhatsApp bot listening on port ${PORT}`);
+});
