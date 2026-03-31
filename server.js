@@ -42,6 +42,8 @@ const sheets = google.sheets({ version: 'v4', auth });
  * Extract data from message
  */
 function parseMessage(message) {
+  const budget = extractBudget(message);
+  
   const data = {
     name: extractValue(message, ['Name', '1.']),
     phone: extractValue(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
@@ -50,7 +52,8 @@ function parseMessage(message) {
     furnishing: extractValue(message, ['Furnishing', '5.']),
     location: extractValue(message, ['Location', 'Preferred Location', '6.']),
     tenantType: extractValue(message, ['Tenant Type', '7.']),
-    budget: extractValue(message, ['Budget', '8.']),
+    budgetRent: budget.rent,
+    budgetDeposit: budget.deposit,
     moveInDate: extractValue(message, ['Move-in Date', '9.']),
     parking: extractValue(message, ['Parking', '10.']),
     foodPref: extractValue(message, ['Food Preference', '11.']),
@@ -59,17 +62,36 @@ function parseMessage(message) {
 }
 
 /**
- * Extract value from message
+ * Extract value from message - gets ONLY the answer after the dash
  */
 function extractValue(message, keywords) {
   for (const keyword of keywords) {
-    const regex = new RegExp(`${keyword}[^–-]*[–-]\\s*([^\\n]+)`, 'i');
+    const regex = new RegExp(`${keyword}[^–-]*[–-]\\s*([^\\n•]+)`, 'i');
     const match = message.match(regex);
     if (match) {
-      return match[1].trim();
+      let answer = match[1].trim();
+      // Remove additional options if present (for single select fields)
+      answer = answer.split('/')[0].trim();
+      return answer;
     }
   }
   return '';
+}
+
+/**
+ * Extract budget rent and deposit separately
+ */
+function extractBudget(message) {
+  const rentRegex = /Rent\s*–\s*([^•\n]+)/i;
+  const depositRegex = /Deposit\s*–\s*([^•\n]+)/i;
+  
+  const rentMatch = message.match(rentRegex);
+  const depositMatch = message.match(depositRegex);
+  
+  return {
+    rent: rentMatch ? rentMatch[1].trim() : '',
+    deposit: depositMatch ? depositMatch[1].trim() : ''
+  };
 }
 
 /**
@@ -85,29 +107,33 @@ async function addToGoogleSheets(message) {
     const customerPhone = parsedData.phone || '';
 
     console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
+    console.log(`Full data:`, parsedData);
 
-    // Prepare row data
+    // Prepare row data - matches your form structure
     const rowData = [
       new Date().toLocaleDateString('en-IN'), // Date
+      customerName, // 1. Name
+      customerPhone, // 2. WhatsApp / Contact Number
+      parsedData.requirement, // 3. Requirement
+      parsedData.configuration, // 4. Configuration
+      parsedData.furnishing, // 5. Furnishing
+      parsedData.location, // 6. Preferred Location
+      parsedData.tenantType, // 7. Tenant Type
+      parsedData.budgetRent, // 8a. Budget - Rent
+      parsedData.budgetDeposit, // 8b. Budget - Deposit
+      parsedData.moveInDate, // 9. Expected Move-in Date
+      parsedData.parking, // 10. Car Parking Required
+      parsedData.foodPref, // 11. Food Preference
       '', // Type (Owner/Tenant) - user fills manually
-      customerName,
-      customerPhone,
-      parsedData.requirement,
-      parsedData.configuration,
-      parsedData.furnishing,
-      parsedData.location,
-      parsedData.tenantType,
-      parsedData.budget,
-      parsedData.moveInDate,
-      parsedData.parking,
-      parsedData.foodPref,
       '', // Notes
     ];
+
+    console.log('Row data to insert:', rowData);
 
     // Append to Google Sheets
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:N',
+      range: 'Sheet1!A:O',
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [rowData],
