@@ -147,14 +147,11 @@ async function addToAirtable(type, data) {
     return cleaned;
   };
 
-  let fields = {
-    Name: data.name || 'Unknown',
-    Phone: data.phone || '',
-  };
+  let fields = {};
 
   if (type === 'tenant') {
     fields = {
-      ...fields,
+      Phone: data.phone || undefined,
       Configuration: data.configuration || undefined,
       Furnishing: data.furnishing || undefined,
       Locations: (data.locations && data.locations.length > 0) ? data.locations.join(', ') : undefined,
@@ -165,11 +162,12 @@ async function addToAirtable(type, data) {
       ParkingNeeded: data.parking_needed !== null ? (data.parking_needed ? 'Yes' : 'No') : undefined,
       Pets: data.pets !== null ? (data.pets ? 'Yes' : 'No') : undefined,
       SpecialRequirements: data.special_requirements || undefined,
-      Confidence: data.confidence || 0,
     };
   } else {
+    // Owners table fields
     fields = {
-      ...fields,
+      Name: data.name || undefined,
+      Phone: data.phone || undefined,
       Configuration: data.configuration || undefined,
       Furnishing: data.furnishing || undefined,
       Location: data.location || undefined,
@@ -177,11 +175,10 @@ async function addToAirtable(type, data) {
       Deposit: data.deposit || undefined,
       Maintenance: data.maintenance || undefined,
       Parking: data.parking || undefined,
-      PetsAllowed: data.pets_allowed !== null ? (data.pets_allowed ? 'Yes' : 'No') : undefined,
+      PetsAllowed: data.pets_allowed !== null ? data.pets_allowed : undefined,
       MoveInDate: data.move_in_date || undefined,
       OccupancyType: data.occupancy_type || undefined,
       SpecialRestrictions: data.special_restrictions || undefined,
-      Confidence: data.confidence || 0,
     };
   }
 
