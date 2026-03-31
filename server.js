@@ -75,8 +75,14 @@ async function sendConfirmation(toPhone, message) {
   const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour message has been saved:\n"${message}"\n\nWe'll get back to you soon!`;
 
   try {
+    // Remove 'whatsapp:' prefix if it exists in TWILIO_PHONE
+    let fromPhone = TWILIO_PHONE;
+    if (fromPhone.startsWith('whatsapp:')) {
+      fromPhone = fromPhone.replace('whatsapp:', '');
+    }
+
     await client.messages.create({
-      from: `whatsapp:${TWILIO_PHONE}`,
+      from: `whatsapp:${fromPhone}`,
       to: `whatsapp:${toPhone}`,
       body: confirmationMsg,
     });
