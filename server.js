@@ -30,34 +30,31 @@ const airtableHeaders = {
  */
 async function extractPropertyInfo(messageText, senderPhone, senderName) {
   const systemPrompt = `You are an AI assistant that extracts property rental information from WhatsApp messages.
-
-Analyze the message and determine if it's from a TENANT (looking for a property) or OWNER (listing a property).
-
 Extract the following information and return ONLY valid JSON (no markdown, no explanation):
 
-For TENANTS, extract:
+For TENANTS:
 {
   "type": "tenant",
   "name": "person's name or null",
-  "phone": "phone number with country code or null",
+  "phone": "phone number or null",
   "configuration": "1BHK, 2BHK, 3BHK etc or null",
   "furnishing": "Furnished, Semi-Furnished, Unfurnished or null",
-  "locations": ["location1", "location2"] (array of preferred locations),
+  "locations": ["location1", "location2"],
   "budget_min": number or null,
   "budget_max": number or null,
   "tenant_type": "Bachelor, Family, Student etc or null",
   "move_in_date": "date or null",
   "parking_needed": true/false or null,
   "pets": true/false or null,
-  "special_requirements": "string describing other needs or null",
-  "confidence": 0.0-1.0 (how confident you are this is a tenant inquiry)
+  "special_requirements": "string or null",
+  "confidence": 0.7
 }
 
-For OWNERS, extract:
+For OWNERS:
 {
   "type": "owner",
   "name": "owner's name or null",
-  "phone": "phone number with country code or null",
+  "phone": "phone number or null",
   "configuration": "1BHK, 2BHK, 3BHK etc or null",
   "furnishing": "Furnished, Semi-Furnished, Unfurnished or null",
   "location": "property location or null",
@@ -68,28 +65,25 @@ For OWNERS, extract:
   "pets_allowed": true/false or null,
   "move_in_date": "date or null",
   "occupancy_type": "Bachelor, Family, Any etc or null",
-  "special_restrictions": "string describing restrictions or null",
-  "confidence": 0.0-1.0 (how confident you are this is a property listing)
+  "special_restrictions": "string or null",
+  "confidence": 0.7
 }
 
-IMPORTANT:
-- Extract phone numbers EXACTLY as they appear (with country code +91 for India if present)
-- For locations, split multiple locations into separate array items
-- For budget, extract as integers (remove 'k', rupee symbol, etc). Examples: "45k" → 45, "50,000" → 50000
+RULES:
+- Extract phone numbers EXACTLY as they appear
+- For budget, extract as integers (remove 'k', rupee symbol, etc)
 - If information is missing, use null
 - Return ONLY the JSON object, nothing else
-- ALWAYS set confidence to 0.6 or higher if ANY property-related info is mentioned
-- Be lenient - if someone mentions budget, location, or BHK, treat as valid tenant inquiry`;
+- Always use confidence 0.7 or higher`;
 
   const userPrompt = `Extract information from this WhatsApp message:
-
 Sender Phone: ${senderPhone}
 Sender Name: ${senderName}
 Message: ${messageText}`;
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-20250805',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1000,
       system: systemPrompt,
       messages: [
@@ -101,8 +95,6 @@ Message: ${messageText}`;
     });
 
     const responseText = response.content[0].type === 'text' ? response.content[0].text : '';
-    
-    // Clean up response - remove markdown code blocks if present
     const cleanedText = responseText.replace(/```json\n?|\n?```/g, '').trim();
     const extractedData = JSON.parse(cleanedText);
     
@@ -114,12 +106,10 @@ Message: ${messageText}`;
 }
 
 /**
- * Check if record already exists in Airtable (to avoid duplicates)
+ * Check if record already exists in Airtable
  */
 async function checkDuplicate(type, phone, name) {
   const tableName = type === 'tenant' ? 'Tenants' : 'Owners';
-  
-  // Filter by phone number
   const filterFormula = `AND({Phone} = "${phone}")`;
   
   try {
@@ -229,17 +219,15 @@ app.post('/webhook', async (req, res) => {
   console.log(`\n📨 New message from ${senderName} (${fromPhone}):\n${messageBody}\n`);
 
   try {
-    // Extract info using Claude
     const extractedData = await extractPropertyInfo(messageBody, fromPhone, senderName);
     console.log('Extracted data:', JSON.stringify(extractedData, null, 2));
 
-    if (!extractedData || extractedData.confidence < 0.2) {
+    if (!extractedData || extractedData.confidence < 0.5) {
       console.log('Low confidence or invalid data. Skipping.');
       res.sendStatus(200);
       return;
     }
 
-    // Check for duplicates
     const isDuplicate = await checkDuplicate(extractedData.type, fromPhone, extractedData.name);
     
     if (isDuplicate) {
@@ -248,11 +236,9 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Add to Airtable
     const recordId = await addToAirtable(extractedData.type, extractedData);
     console.log(`✅ Record added to Airtable: ${recordId}`);
 
-    // Send confirmation
     await sendConfirmation(fromPhone, extractedData.type, extractedData.name || senderName, extractedData);
 
     res.sendStatus(200);
