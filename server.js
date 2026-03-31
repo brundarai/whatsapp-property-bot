@@ -2,8 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const twilio = require('twilio');
 const ExcelJS = require('exceljs');
-const path = require('path');
-const fs = require('fs');
+const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
@@ -13,7 +12,13 @@ app.use(bodyParser.json());
 // Initialize Twilio client
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const TWILIO_PHONE = process.env.TWILIO_PHONE_NUMBER;
-const EXCEL_FILE = path.join('/tmp', 'property_data.xlsx');
+
+// Microsoft Graph API credentials
+const GRAPH_API_TOKEN = process.env.MICROSOFT_GRAPH_TOKEN;
+const ONEDRIVE_FILE_ID = process.env.ONEDRIVE_FILE_ID;
+
+// Your business number to ignore
+const BUSINESS_PHONE = '919380729579';
 
 /**
  * Extract data from message
@@ -50,68 +55,64 @@ function extractValue(message, keywords) {
 }
 
 /**
- * Initialize or get Excel workbook
+ * Get file from OneDrive and add record
  */
-async function getOrCreateWorkbook() {
-  let workbook;
-  
-  if (fs.existsSync(EXCEL_FILE)) {
-    workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.readFile(EXCEL_FILE);
-  } else {
-    workbook = new ExcelJS.Workbook();
-    
-    // Create single master sheet
-    const sheet = workbook.addWorksheet('Master Data');
-    sheet.columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Type', key: 'type', width: 10 }, // Owner or Tenant
-      { header: 'Name', key: 'name', width: 15 },
-      { header: 'Phone', key: 'phone', width: 15 },
-      { header: 'Requirement', key: 'requirement', width: 12 },
-      { header: 'Configuration', key: 'configuration', width: 12 },
-      { header: 'Furnishing', key: 'furnishing', width: 15 },
-      { header: 'Location', key: 'location', width: 20 },
-      { header: 'Tenant Type', key: 'tenantType', width: 12 },
-      { header: 'Budget', key: 'budget', width: 15 },
-      { header: 'Move-in Date', key: 'moveInDate', width: 15 },
-      { header: 'Parking', key: 'parking', width: 12 },
-      { header: 'Food Preference', key: 'foodPref', width: 12 },
-      { header: 'Notes', key: 'notes', width: 20 },
-    ];
-    
-    // Format header
-    sheet.getRow(1).font = { bold: true };
-    sheet.getRow(1).fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFD3D3D3' }
-    };
-    
-    await workbook.xlsx.writeFile(EXCEL_FILE);
-  }
-  
-  return workbook;
-}
-
-/**
- * Add record to Excel
- */
-async function addToExcel(senderPhone, message) {
+async function addToOneDrive(message) {
   try {
-    const workbook = await getOrCreateWorkbook();
-    const worksheet = workbook.getWorksheet('Master Data');
+    // Download current file
+    const downloadUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${ONEDRIVE_FILE_ID}/content`;
+    const response = await axios.get(downloadUrl, {
+      headers: {
+        'Authorization': `Bearer ${GRAPH_API_TOKEN}`
+      },
+      responseType: 'arraybuffer'
+    });
+
+    // Load workbook
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.data);
     
-    // Parse message to extract data
+    // Get or create sheet
+    let worksheet = workbook.getWorksheet('NammaHood Database');
+    if (!worksheet) {
+      worksheet = workbook.addWorksheet('NammaHood Database');
+      worksheet.columns = [
+        { header: 'Date', key: 'date', width: 12 },
+        { header: 'Type', key: 'type', width: 10 },
+        { header: 'Name', key: 'name', width: 15 },
+        { header: 'Phone', key: 'phone', width: 15 },
+        { header: 'Requirement', key: 'requirement', width: 12 },
+        { header: 'Configuration', key: 'configuration', width: 12 },
+        { header: 'Furnishing', key: 'furnishing', width: 15 },
+        { header: 'Location', key: 'location', width: 20 },
+        { header: 'Tenant Type', key: 'tenantType', width: 12 },
+        { header: 'Budget', key: 'budget', width: 15 },
+        { header: 'Move-in Date', key: 'moveInDate', width: 15 },
+        { header: 'Parking', key: 'parking', width: 12 },
+        { header: 'Food Preference', key: 'foodPref', width: 12 },
+        { header: 'Notes', key: 'notes', width: 20 },
+      ];
+      
+      // Format header
+      worksheet.getRow(1).font = { bold: true };
+      worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFD3D3D3' }
+      };
+    }
+
+    // Parse message
     const parsedData = parseMessage(message);
-    
-    // Get name and phone from parsed data (not from sender)
     const customerName = parsedData.name || 'Unknown';
-    const customerPhone = parsedData.phone || senderPhone;
-    
+    const customerPhone = parsedData.phone || '';
+
+    console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
+
+    // Add new row
     const row = {
       date: new Date().toLocaleDateString('en-IN'),
-      type: '', // Empty - you'll fill this manually
+      type: '',
       name: customerName,
       phone: customerPhone,
       requirement: parsedData.requirement,
@@ -125,14 +126,25 @@ async function addToExcel(senderPhone, message) {
       foodPref: parsedData.foodPref,
       notes: '',
     };
-    
+
     worksheet.addRow(row);
-    await workbook.xlsx.writeFile(EXCEL_FILE);
-    
-    console.log(`✅ Record added to Master Sheet`);
+
+    // Convert to buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    // Upload back to OneDrive
+    const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${ONEDRIVE_FILE_ID}/content`;
+    await axios.put(uploadUrl, buffer, {
+      headers: {
+        'Authorization': `Bearer ${GRAPH_API_TOKEN}`,
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }
+    });
+
+    console.log(`✅ Record added to OneDrive NammaHood Database`);
     return true;
   } catch (error) {
-    console.error('Error adding to Excel:', error);
+    console.error('Error adding to OneDrive:', error.message);
     throw error;
   }
 }
@@ -144,7 +156,6 @@ async function sendConfirmation(toPhone) {
   const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour information has been saved.\n\nWe'll get back to you soon!`;
 
   try {
-    // Remove 'whatsapp:' prefix if it exists in TWILIO_PHONE
     let fromPhone = TWILIO_PHONE;
     if (fromPhone.startsWith('whatsapp:')) {
       fromPhone = fromPhone.replace('whatsapp:', '');
@@ -172,21 +183,22 @@ app.post('/webhook', async (req, res) => {
   console.log(`\n📨 New message from ${senderName} (${fromPhone}):\n${messageBody}\n`);
 
   try {
-    // Skip if message is too short
     if (!messageBody || messageBody.trim().length < 5) {
       res.sendStatus(200);
       return;
     }
 
-    // Skip if it's from NammaHood (your business number)
-    if (fromPhone === '919380729579' || fromPhone === '+919380729579') {
+    const normalizedFromPhone = fromPhone.replace(/\D/g, '');
+    const normalizedBusinessPhone = BUSINESS_PHONE.replace(/\D/g, '');
+    
+    if (normalizedFromPhone === normalizedBusinessPhone) {
       console.log('Ignoring message from NammaHood (business number)');
       res.sendStatus(200);
       return;
     }
 
-    // Save to Excel
-    await addToExcel(fromPhone, messageBody);
+    // Add to OneDrive
+    await addToOneDrive(messageBody);
 
     // Send confirmation
     await sendConfirmation(fromPhone);
@@ -205,19 +217,26 @@ app.get('/health', (req, res) => {
   res.json({ status: 'Bot is running!' });
 });
 
-/**
- * Download Excel file endpoint
- */
-app.get('/download-excel', (req, res) => {
-  if (fs.existsSync(EXCEL_FILE)) {
-    res.download(EXCEL_FILE, 'property_data.xlsx');
-  } else {
-    res.status(404).json({ error: 'No data file found yet' });
-  }
-});
-
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 WhatsApp bot listening on port ${PORT}`);
 });
+```
+
+---
+
+## **Now You Need to:**
+
+### **Step 1: Get Microsoft Graph Token**
+
+1. **Go to:** https://developer.microsoft.com/en-us/graph/graph-explorer
+2. **Sign in with your Microsoft account**
+3. **In the top left, click "Get access token"**
+4. **Copy the token**
+
+### **Step 2: Get OneDrive File ID**
+
+From your OneDrive link:
+```
+https://1drv.ms/x/c/c0e8d9ba02b62110/IQA-SFCK1AoVRqQTCt83gTV6ART6htmIUVys48-2qwjph7g?e=CqSfiQ
