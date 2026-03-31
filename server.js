@@ -59,14 +59,22 @@ function extractValue(message, keywords) {
  */
 async function addToOneDrive(message) {
   try {
+    console.log('Starting OneDrive upload...');
+    console.log('Token:', GRAPH_API_TOKEN ? 'Present' : 'Missing');
+    console.log('File ID:', ONEDRIVE_FILE_ID ? 'Present' : 'Missing');
+
     // Download current file
     const downloadUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${ONEDRIVE_FILE_ID}/content`;
+    console.log('Downloading from:', downloadUrl);
+
     const response = await axios.get(downloadUrl, {
       headers: {
         'Authorization': `Bearer ${GRAPH_API_TOKEN}`
       },
       responseType: 'arraybuffer'
     });
+
+    console.log('File downloaded successfully');
 
     // Load workbook
     const workbook = new ExcelJS.Workbook();
@@ -75,6 +83,7 @@ async function addToOneDrive(message) {
     // Get or create sheet
     let worksheet = workbook.getWorksheet('NammaHood Database');
     if (!worksheet) {
+      console.log('Creating new sheet: NammaHood Database');
       worksheet = workbook.addWorksheet('NammaHood Database');
       worksheet.columns = [
         { header: 'Date', key: 'date', width: 12 },
@@ -128,9 +137,11 @@ async function addToOneDrive(message) {
     };
 
     worksheet.addRow(row);
+    console.log('Row added to worksheet');
 
     // Convert to buffer
     const buffer = await workbook.xlsx.writeBuffer();
+    console.log('Buffer created, uploading to OneDrive...');
 
     // Upload back to OneDrive
     const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${ONEDRIVE_FILE_ID}/content`;
@@ -144,7 +155,7 @@ async function addToOneDrive(message) {
     console.log(`✅ Record added to OneDrive NammaHood Database`);
     return true;
   } catch (error) {
-    console.error('Error adding to OneDrive:', error.message);
+    console.error('Error adding to OneDrive:', error.response?.data || error.message);
     throw error;
   }
 }
@@ -222,21 +233,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 WhatsApp bot listening on port ${PORT}`);
 });
-```
-
----
-
-## **Now You Need to:**
-
-### **Step 1: Get Microsoft Graph Token**
-
-1. **Go to:** https://developer.microsoft.com/en-us/graph/graph-explorer
-2. **Sign in with your Microsoft account**
-3. **In the top left, click "Get access token"**
-4. **Copy the token**
-
-### **Step 2: Get OneDrive File ID**
-
-From your OneDrive link:
-```
-https://1drv.ms/x/c/c0e8d9ba02b62110/IQA-SFCK1AoVRqQTCt83gTV6ART6htmIUVys48-2qwjph7g?e=CqSfiQ
