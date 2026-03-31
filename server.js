@@ -75,10 +75,11 @@ For OWNERS, extract:
 IMPORTANT:
 - Extract phone numbers EXACTLY as they appear (with country code +91 for India if present)
 - For locations, split multiple locations into separate array items
-- For budget, extract as integers (remove 'k', rupee symbol, etc)
+- For budget, extract as integers (remove 'k', rupee symbol, etc). Examples: "45k" → 45, "50,000" → 50000
 - If information is missing, use null
 - Return ONLY the JSON object, nothing else
-- If confidence is below 0.5, still return the data but mark confidence accurately`;
+- ALWAYS set confidence to 0.6 or higher if ANY property-related info is mentioned
+- Be lenient - if someone mentions budget, location, or BHK, treat as valid tenant inquiry`;
 
   const userPrompt = `Extract information from this WhatsApp message:
 
@@ -232,7 +233,7 @@ app.post('/webhook', async (req, res) => {
     const extractedData = await extractPropertyInfo(messageBody, fromPhone, senderName);
     console.log('Extracted data:', JSON.stringify(extractedData, null, 2));
 
-    if (!extractedData || extractedData.confidence < 0.3) {
+    if (!extractedData || extractedData.confidence < 0.2) {
       console.log('Low confidence or invalid data. Skipping.');
       res.sendStatus(200);
       return;
