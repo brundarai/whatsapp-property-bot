@@ -204,7 +204,8 @@ async function addToAirtable(type, data) {
   } catch (error) {
     const airtableError = error.response?.data?.error;
     if (airtableError) {
-      console.error('❌ Airtable Error:', airtableError);
+      console.error('❌ Airtable Error:', JSON.stringify(airtableError));
+      console.error('❌ Attempted to send:', JSON.stringify(fields));
     } else {
       console.error('❌ Error adding to Airtable:', error.message);
     }
