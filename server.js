@@ -39,29 +39,6 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 
 /**
- * Extract data from message
- */
-function parseMessage(message) {
-  const budget = extractBudget(message);
-  
-  const data = {
-    name: extractValue(message, ['Name', '1.']),
-    phone: extractValue(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
-    requirement: extractValue(message, ['Requirement', '3.']),
-    configuration: extractValue(message, ['Configuration', '4.']),
-    furnishing: extractValue(message, ['Furnishing', '5.']),
-    location: extractValue(message, ['Location', 'Preferred Location', '6.']),
-    tenantType: extractValue(message, ['Tenant Type', '7.']),
-    budgetRent: budget.rent,
-    budgetDeposit: budget.deposit,
-    moveInDate: extractValue(message, ['Move-in Date', '9.']),
-    parking: extractValue(message, ['Parking', '10.']),
-    foodPref: extractValue(message, ['Food Preference', '11.']),
-  };
-  return data;
-}
-
-/**
  * Extract value from message - gets ONLY the answer after the dash
  */
 function extractValue(message, keywords) {
@@ -95,7 +72,64 @@ function extractBudget(message) {
 }
 
 /**
- * Add record to Google Sheets
+ * Detect if message is from Tenant or Owner
+ * Tenants: mention "Rent", "Looking for", have "Tenant Type"
+ * Owners: mention "Property", "Listing", "For Rent", specify Rental amount
+ */
+function detectType(message) {
+  const lowerMessage = message.toLowerCase();
+  
+  // Check for tenant indicators
+  const tenantIndicators = ['looking for', 'need', 'seeking', 'want', 'search', 'tenant type'];
+  const ownerIndicators = ['property', 'listing', 'available', 'for rent', 'rental', '• rent –'];
+  
+  let tenantScore = 0;
+  let ownerScore = 0;
+  
+  tenantIndicators.forEach(indicator => {
+    if (lowerMessage.includes(indicator)) tenantScore++;
+  });
+  
+  ownerIndicators.forEach(indicator => {
+    if (lowerMessage.includes(indicator)) ownerScore++;
+  });
+  
+  // If message has rental budget info with values, likely owner listing
+  if (lowerMessage.includes('• rent –') && lowerMessage.includes('• deposit –')) {
+    return 'Owner';
+  }
+  
+  // Default to tenant if scores are equal or tenant score is higher
+  return tenantScore >= ownerScore ? 'Tenant' : 'Owner';
+}
+
+/**
+ * Extract data from message
+ */
+function parseMessage(message) {
+  const budget = extractBudget(message);
+  const type = detectType(message);
+  
+  const data = {
+    type: type,
+    name: extractValue(message, ['Name', '1.']),
+    phone: extractValue(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
+    requirement: extractValue(message, ['Requirement', '3.']),
+    configuration: extractValue(message, ['Configuration', '4.']),
+    furnishing: extractValue(message, ['Furnishing', '5.']),
+    location: extractValue(message, ['Location', 'Preferred Location', '6.']),
+    tenantType: extractValue(message, ['Tenant Type', 'Occupancy Type', '7.']),
+    budgetRent: budget.rent,
+    budgetDeposit: budget.deposit,
+    moveInDate: extractValue(message, ['Move-in Date', '9.']),
+    parking: extractValue(message, ['Parking', '10.']),
+    foodPref: extractValue(message, ['Food Preference', '11.']),
+  };
+  return data;
+}
+
+/**
+ * Add record to Google Sheets (Tenants or Owners sheet)
  */
 async function addToGoogleSheets(message) {
   try {
@@ -105,42 +139,43 @@ async function addToGoogleSheets(message) {
     const parsedData = parseMessage(message);
     const customerName = parsedData.name || 'Unknown';
     const customerPhone = parsedData.phone || '';
+    const sheetName = parsedData.type === 'Owner' ? 'Owners' : 'Tenants';
 
+    console.log(`Detected Type: ${parsedData.type}`);
+    console.log(`Sheet: ${sheetName}`);
     console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
-    console.log(`Full data:`, parsedData);
 
-    // Prepare row data - matches your form structure
+    // Prepare row data
     const rowData = [
       new Date().toLocaleDateString('en-IN'), // Date
-      customerName, // 1. Name
-      customerPhone, // 2. WhatsApp / Contact Number
-      parsedData.requirement, // 3. Requirement
-      parsedData.configuration, // 4. Configuration
-      parsedData.furnishing, // 5. Furnishing
-      parsedData.location, // 6. Preferred Location
-      parsedData.tenantType, // 7. Tenant Type
-      parsedData.budgetRent, // 8a. Budget - Rent
-      parsedData.budgetDeposit, // 8b. Budget - Deposit
-      parsedData.moveInDate, // 9. Expected Move-in Date
-      parsedData.parking, // 10. Car Parking Required
-      parsedData.foodPref, // 11. Food Preference
-      '', // Type (Owner/Tenant) - user fills manually
+      customerName, // Name
+      customerPhone, // WhatsApp / Contact Number
+      parsedData.requirement, // Requirement
+      parsedData.configuration, // Configuration
+      parsedData.furnishing, // Furnishing
+      parsedData.location, // Preferred Location
+      parsedData.tenantType, // Tenant Type / Occupancy Type
+      parsedData.budgetRent, // Budget - Rent / Rental
+      parsedData.budgetDeposit, // Budget - Deposit / Maintenance
+      parsedData.moveInDate, // Expected Move-in Date
+      parsedData.parking, // Car Parking Required
+      parsedData.foodPref, // Food Preference
       '', // Notes
     ];
 
     console.log('Row data to insert:', rowData);
 
-    // Append to Google Sheets
+    // Append to appropriate sheet
     const response = await sheets.spreadsheets.values.append({
       spreadsheetId: SHEET_ID,
-      range: 'Sheet1!A:O',
+      range: `${sheetName}!A:N`,
       valueInputOption: 'USER_ENTERED',
       resource: {
         values: [rowData],
       },
     });
 
-    console.log(`✅ Record added to Google Sheets`);
+    console.log(`✅ Record added to ${sheetName} sheet`);
     return true;
   } catch (error) {
     console.error('Error adding to Google Sheets:', error.message);
@@ -151,8 +186,8 @@ async function addToGoogleSheets(message) {
 /**
  * Send WhatsApp message confirmation
  */
-async function sendConfirmation(toPhone) {
-  const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour information has been saved.\n\nWe'll get back to you soon!`;
+async function sendConfirmation(toPhone, type) {
+  const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour ${type.toLowerCase()} information has been saved.\n\nWe'll get back to you soon!`;
 
   try {
     let fromPhone = TWILIO_PHONE;
@@ -187,11 +222,14 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
+    // Parse to get type
+    const parsedData = parseMessage(messageBody);
+
     // Add to Google Sheets
     await addToGoogleSheets(messageBody);
 
     // Send confirmation
-    await sendConfirmation(fromPhone);
+    await sendConfirmation(fromPhone, parsedData.type);
 
     res.sendStatus(200);
   } catch (error) {
