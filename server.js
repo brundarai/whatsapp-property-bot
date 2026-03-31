@@ -230,31 +230,47 @@ app.post('/webhook', async (req, res) => {
   console.log(`\n📨 New message from ${senderName} (${fromPhone}):\n${messageBody}\n`);
 
   try {
+    console.log('🔍 Step 1: Extracting data with Claude...');
     const extractedData = await extractPropertyInfo(messageBody, fromPhone, senderName);
     console.log('Extracted data:', JSON.stringify(extractedData, null, 2));
 
-    if (!extractedData || extractedData.confidence < 0.5) {
-      console.log('Low confidence or invalid data. Skipping.');
+    if (!extractedData) {
+      console.log('❌ No data extracted (extractedData is null). Skipping.');
       res.sendStatus(200);
       return;
     }
 
+    if (extractedData.confidence < 0.5) {
+      console.log(`⚠️ Low confidence (${extractedData.confidence}). Skipping.`);
+      res.sendStatus(200);
+      return;
+    }
+
+    console.log(`✅ Confidence: ${extractedData.confidence}`);
+    console.log(`✅ Type: ${extractedData.type}`);
+
+    console.log('🔍 Step 2: Checking for duplicates...');
     const isDuplicate = await checkDuplicate(extractedData.type, fromPhone, extractedData.name);
     
     if (isDuplicate) {
-      console.log(`Duplicate entry detected for ${extractedData.name}`);
+      console.log(`⚠️ Duplicate entry detected for ${extractedData.name}. Skipping.`);
       res.sendStatus(200);
       return;
     }
 
+    console.log('✅ No duplicate found.');
+    console.log('🔍 Step 3: Adding to Airtable...');
     const recordId = await addToAirtable(extractedData.type, extractedData);
     console.log(`✅ Record added to Airtable: ${recordId}`);
 
+    console.log('🔍 Step 4: Sending WhatsApp confirmation...');
     await sendConfirmation(fromPhone, extractedData.type, extractedData.name || senderName, extractedData);
+    console.log(`✅ Confirmation sent to ${fromPhone}`);
 
     res.sendStatus(200);
   } catch (error) {
-    console.error('Error processing message:', error);
+    console.error('❌ Error processing message:', error.message);
+    console.error('Full error:', error);
     res.sendStatus(500);
   }
 });
