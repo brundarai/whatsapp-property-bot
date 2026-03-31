@@ -196,7 +196,12 @@ async function addToAirtable(type, data) {
 
     return response.data.id;
   } catch (error) {
-    console.error('Error adding to Airtable:', error.response?.data || error.message);
+    const airtableError = error.response?.data?.error;
+    if (airtableError) {
+      console.error('❌ Airtable Error:', airtableError);
+    } else {
+      console.error('❌ Error adding to Airtable:', error.message);
+    }
     throw error;
   }
 }
