@@ -47,7 +47,7 @@ For TENANTS:
   "parking_needed": true/false or null,
   "pets": true/false or null,
   "special_requirements": "string or null",
-  "confidence": 0.7
+  "confidence": 0.8
 }
 
 For OWNERS:
@@ -66,7 +66,7 @@ For OWNERS:
   "move_in_date": "date or null",
   "occupancy_type": "Bachelor, Family, Any etc or null",
   "special_restrictions": "string or null",
-  "confidence": 0.7
+  "confidence": 0.8
 }
 
 RULES:
@@ -74,7 +74,7 @@ RULES:
 - For budget, extract as integers (remove 'k', rupee symbol, etc)
 - If information is missing, use null
 - Return ONLY the JSON object, nothing else
-- Always use confidence 0.7 or higher`;
+- Always use confidence 0.8 or higher`;
 
   const userPrompt = `Extract information from this WhatsApp message:
 Sender Phone: ${senderPhone}
@@ -83,7 +83,7 @@ Message: ${messageText}`;
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-3-haiku-20250307',
       max_tokens: 1000,
       system: systemPrompt,
       messages: [
