@@ -136,6 +136,17 @@ async function checkDuplicate(type, phone, name) {
 async function addToAirtable(type, data) {
   const tableName = type === 'tenant' ? 'Tenants' : 'Owners';
   
+  // Helper function to filter out null/undefined values
+  const cleanFields = (obj) => {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== null && value !== undefined && value !== '') {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  };
+
   let fields = {
     Name: data.name || 'Unknown',
     Phone: data.phone || '',
@@ -144,35 +155,38 @@ async function addToAirtable(type, data) {
   if (type === 'tenant') {
     fields = {
       ...fields,
-      Configuration: data.configuration || '',
-      Furnishing: data.furnishing || '',
-      Locations: (data.locations || []).join(', '),
-      BudgetMin: data.budget_min || '',
-      BudgetMax: data.budget_max || '',
-      TenantType: data.tenant_type || '',
-      MoveInDate: data.move_in_date || '',
-      ParkingNeeded: data.parking_needed ? 'Yes' : 'No',
-      Pets: data.pets ? 'Yes' : 'No',
-      SpecialRequirements: data.special_requirements || '',
+      Configuration: data.configuration || undefined,
+      Furnishing: data.furnishing || undefined,
+      Locations: (data.locations && data.locations.length > 0) ? data.locations.join(', ') : undefined,
+      BudgetMin: data.budget_min || undefined,
+      BudgetMax: data.budget_max || undefined,
+      TenantType: data.tenant_type || undefined,
+      MoveInDate: data.move_in_date || undefined,
+      ParkingNeeded: data.parking_needed !== null ? (data.parking_needed ? 'Yes' : 'No') : undefined,
+      Pets: data.pets !== null ? (data.pets ? 'Yes' : 'No') : undefined,
+      SpecialRequirements: data.special_requirements || undefined,
       Confidence: data.confidence || 0,
     };
   } else {
     fields = {
       ...fields,
-      Configuration: data.configuration || '',
-      Furnishing: data.furnishing || '',
-      Location: data.location || '',
-      Rental: data.rental || '',
-      Deposit: data.deposit || '',
-      Maintenance: data.maintenance || '',
-      Parking: data.parking || '',
-      PetsAllowed: data.pets_allowed ? 'Yes' : 'No',
-      MoveInDate: data.move_in_date || '',
-      OccupancyType: data.occupancy_type || '',
-      SpecialRestrictions: data.special_restrictions || '',
+      Configuration: data.configuration || undefined,
+      Furnishing: data.furnishing || undefined,
+      Location: data.location || undefined,
+      Rental: data.rental || undefined,
+      Deposit: data.deposit || undefined,
+      Maintenance: data.maintenance || undefined,
+      Parking: data.parking || undefined,
+      PetsAllowed: data.pets_allowed !== null ? (data.pets_allowed ? 'Yes' : 'No') : undefined,
+      MoveInDate: data.move_in_date || undefined,
+      OccupancyType: data.occupancy_type || undefined,
+      SpecialRestrictions: data.special_restrictions || undefined,
       Confidence: data.confidence || 0,
     };
   }
+
+  // Remove undefined values before sending
+  fields = cleanFields(fields);
 
   try {
     const response = await axios.post(
