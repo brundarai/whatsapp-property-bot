@@ -38,7 +38,7 @@ For TENANTS:
   "name": "person's name or null",
   "phone": "phone number or null",
   "configuration": "1 BHK or 2 BHK or 3 BHK or 4 BHK or 5 BHK (SINGLE VALUE ONLY, with space)",
-  "furnishing": "Furnished or Semi-Furnished or Unfurnished (SINGLE VALUE)",
+  "furnishing": "Furnished or Semi Furnished or Unfurnished (SINGLE VALUE, use space not hyphen)",
   "locations": ["location1", "location2"],
   "budget_min": number or null,
   "budget_max": number or null,
@@ -56,7 +56,7 @@ For OWNERS:
   "name": "owner's name or null",
   "phone": "phone number or null",
   "configuration": "1 BHK or 2 BHK or 3 BHK or 4 BHK or 5 BHK (SINGLE VALUE ONLY, with space)",
-  "furnishing": "Furnished or Semi-Furnished or Unfurnished (SINGLE VALUE)",
+  "furnishing": "Furnished or Semi Furnished or Unfurnished (SINGLE VALUE, use space not hyphen)",
   "location": "property location or null",
   "rental": number or null,
   "deposit": number or null,
@@ -187,6 +187,11 @@ async function addToAirtable(type, data) {
 
   // Remove undefined values before sending
   fields = cleanFields(fields);
+
+  // Fix Furnishing field - replace hyphen with space
+  if (fields.Furnishing) {
+    fields.Furnishing = fields.Furnishing.replace('Semi-Furnished', 'Semi Furnished');
+  }
 
   try {
     const response = await axios.post(
