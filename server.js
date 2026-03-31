@@ -59,22 +59,27 @@ function detectTypeFromKeywords(message) {
     return 'Owner';
   }
   
-  // Check for keywords
-  const tenantKeywords = ['looking for', 'need', 'seeking', 'want', 'search', 'require', 'looking', 'budget'];
-  const ownerKeywords = ['property', 'listing', 'available', 'for rent', 'rental', 'lease', 'let out'];
+  // Check for keywords - Tenant
+  const tenantKeywords = ['looking for', 'looking', 'need', 'seeking', 'want', 'search', 'require', 'budget', 'searching'];
   
-  let tenantScore = 0;
-  let ownerScore = 0;
+  // Check for keywords - Owner
+  const ownerKeywords = ['property', 'listing', 'available', 'for rent', 'rental', 'lease', 'let out', 'have a', 'own a'];
+  
+  let tenantCount = 0;
+  let ownerCount = 0;
   
   tenantKeywords.forEach(keyword => {
-    if (lowerMessage.includes(keyword)) tenantScore++;
+    if (lowerMessage.includes(keyword)) tenantCount++;
   });
   
   ownerKeywords.forEach(keyword => {
-    if (lowerMessage.includes(keyword)) ownerScore++;
+    if (lowerMessage.includes(keyword)) ownerCount++;
   });
   
-  return tenantScore >= ownerScore ? 'Tenant' : 'Owner';
+  console.log(`Type detection - Tenant keywords: ${tenantCount}, Owner keywords: ${ownerCount}`);
+  
+  // Default to Tenant if Tenant keywords found, otherwise Owner
+  return tenantCount > ownerCount ? 'Tenant' : 'Owner';
 }
 
 /**
@@ -152,11 +157,20 @@ function extractFromNaturalLanguage(message) {
  * Extract name from natural language
  */
 function extractName(message) {
-  // Try "I'm [name]" or "this is [name]" or "[name] here"
-  let match = message.match(/(?:I'm|this is|I am|name is|hello|hi)\s+([A-Za-z\s]+?)(?:\s+(?:here|from|and|i'm|looking|need)|\.|$)/i);
+  // Try "Brunda here" or "[name] here" (at start)
+  let match = message.match(/^[A-Za-z]+,?\s+([A-Za-z]+)\s+here/i);
   if (match) return match[1].trim();
   
-  match = message.match(/^([A-Za-z\s]+?)\s+(?:here|speaking|looking|need)/i);
+  // Try "I'm [name]" or "this is [name]" or "[name] here"
+  match = message.match(/(?:I'm|this is|I am|name is|hello|hi)\s+([A-Za-z\s]+?)(?:\s+(?:here|from|and|i'm|looking|need)|\.|$)/i);
+  if (match) return match[1].trim();
+  
+  // Try just "[Name] here"
+  match = message.match(/\b([A-Z][a-z]+)\s+here\b/i);
+  if (match) return match[1].trim();
+  
+  // Try at start of message (first capitalized word)
+  match = message.match(/^([A-Z][a-z]+)/);
   if (match) return match[1].trim();
   
   return '';
@@ -185,7 +199,15 @@ function extractConfiguration(message) {
  */
 function extractLocation(message) {
   // Look for "in [location]" or "at [location]"
-  let match = message.match(/(?:in|at|near|around)\s+([A-Za-z\s]+?)(?:\s+(?:with|and|budget|having|need|want)|,|$)/i);
+  let match = message.match(/(?:in|at|near|around)\s+([A-Za-z\s]+?)(?:\s+(?:with|and|budget|having|need|want|will)|,|$)/i);
+  if (match) return match[1].trim();
+  
+  // Look for location after BHK mention
+  match = message.match(/\d+\s*bhk\s+(?:in|at|near)\s+([A-Za-z\s]+?)(?:\s|,|$)/i);
+  if (match) return match[1].trim();
+  
+  // Look for capitalized words (potential location names)
+  match = message.match(/(?:in|at|near)\s+([A-Z][a-z]+)/i);
   if (match) return match[1].trim();
   
   return '';
@@ -195,14 +217,17 @@ function extractLocation(message) {
  * Extract budget from natural language
  */
 function extractBudget(message) {
-  // Look for "budget of 45k", "45k budget", "₹45000", etc.
-  let match = message.match(/budget\s+(?:of\s+)?([0-9.k]+)/i);
+  // Look for "budget of 45k", "45k budget", "₹45000", "20-25k", etc.
+  let match = message.match(/budget\s+(?:of\s+)?([0-9.k-]+)/i);
   if (match) return match[1].trim();
   
   match = message.match(/₹\s*([0-9,]+)/);
   if (match) return match[1].trim();
   
-  match = message.match(/([0-9]+k)\b/i);
+  match = message.match(/([0-9]+-?[0-9]*k)\b/i);
+  if (match) return match[1].trim();
+  
+  match = message.match(/([0-9,]+)\s*(?:budget|per month|pm)/i);
   if (match) return match[1].trim();
   
   return '';
