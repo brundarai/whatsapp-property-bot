@@ -39,15 +39,53 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 
 /**
- * Extract value from message - gets ONLY the answer after the dash
+ * Detect if message is structured form or free-form natural language
  */
-function extractValue(message, keywords) {
+function isStructuredForm(message) {
+  // Check for numbered format like "1. Name –" or "1. Name -"
+  return /^\d+\.\s+\w+\s+[–-]/m.test(message);
+}
+
+/**
+ * Detect Tenant or Owner from keywords
+ */
+function detectTypeFromKeywords(message) {
+  const lowerMessage = message.toLowerCase();
+  
+  // Check for explicit mention first
+  if (lowerMessage.includes('tenant:') || lowerMessage.match(/^tenant\s/i)) {
+    return 'Tenant';
+  } else if (lowerMessage.includes('owner:') || lowerMessage.match(/^owner\s/i)) {
+    return 'Owner';
+  }
+  
+  // Check for keywords
+  const tenantKeywords = ['looking for', 'need', 'seeking', 'want', 'search', 'require', 'looking', 'budget'];
+  const ownerKeywords = ['property', 'listing', 'available', 'for rent', 'rental', 'lease', 'let out'];
+  
+  let tenantScore = 0;
+  let ownerScore = 0;
+  
+  tenantKeywords.forEach(keyword => {
+    if (lowerMessage.includes(keyword)) tenantScore++;
+  });
+  
+  ownerKeywords.forEach(keyword => {
+    if (lowerMessage.includes(keyword)) ownerScore++;
+  });
+  
+  return tenantScore >= ownerScore ? 'Tenant' : 'Owner';
+}
+
+/**
+ * Extract value from structured form message
+ */
+function extractValueStructured(message, keywords) {
   for (const keyword of keywords) {
     const regex = new RegExp(`${keyword}[^–-]*[–-]\\s*([^\\n•]+)`, 'i');
     const match = message.match(regex);
     if (match) {
       let answer = match[1].trim();
-      // Remove additional options if present (for single select fields)
       answer = answer.split('/')[0].trim();
       return answer;
     }
@@ -56,9 +94,9 @@ function extractValue(message, keywords) {
 }
 
 /**
- * Extract budget rent and deposit separately
+ * Extract budget from structured form
  */
-function extractBudget(message) {
+function extractBudgetStructured(message) {
   const rentRegex = /Rent\s*–\s*([^•\n]+)/i;
   const depositRegex = /Deposit\s*–\s*([^•\n]+)/i;
   
@@ -72,64 +110,166 @@ function extractBudget(message) {
 }
 
 /**
- * Detect if message is from Tenant or Owner
- * Tenants: mention "Rent", "Looking for", have "Tenant Type"
- * Owners: mention "Property", "Listing", "For Rent", specify Rental amount
+ * Extract data from free-form natural language message
  */
-function detectType(message) {
-  const lowerMessage = message.toLowerCase();
-  
-  // Check for tenant indicators
-  const tenantIndicators = ['looking for', 'need', 'seeking', 'want', 'search', 'tenant type'];
-  const ownerIndicators = ['property', 'listing', 'available', 'for rent', 'rental', '• rent –'];
-  
-  let tenantScore = 0;
-  let ownerScore = 0;
-  
-  tenantIndicators.forEach(indicator => {
-    if (lowerMessage.includes(indicator)) tenantScore++;
-  });
-  
-  ownerIndicators.forEach(indicator => {
-    if (lowerMessage.includes(indicator)) ownerScore++;
-  });
-  
-  // If message has rental budget info with values, likely owner listing
-  if (lowerMessage.includes('• rent –') && lowerMessage.includes('• deposit –')) {
-    return 'Owner';
-  }
-  
-  // Default to tenant if scores are equal or tenant score is higher
-  return tenantScore >= ownerScore ? 'Tenant' : 'Owner';
-}
-
-/**
- * Extract data from message
- */
-function parseMessage(message) {
-  const budget = extractBudget(message);
-  const type = detectType(message);
+function extractFromNaturalLanguage(message) {
+  // Remove "Tenant:" or "Owner:" prefix if present
+  let cleanMessage = message.replace(/^(tenant|owner):\s*/i, '');
   
   const data = {
-    type: type,
-    name: extractValue(message, ['Name', '1.']),
-    phone: extractValue(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
-    requirement: extractValue(message, ['Requirement', '3.']),
-    configuration: extractValue(message, ['Configuration', '4.']),
-    furnishing: extractValue(message, ['Furnishing', '5.']),
-    location: extractValue(message, ['Location', 'Preferred Location', '6.']),
-    tenantType: extractValue(message, ['Tenant Type', 'Occupancy Type', '7.']),
-    budgetRent: budget.rent,
-    budgetDeposit: budget.deposit,
-    moveInDate: extractValue(message, ['Move-in Date', '9.']),
-    parking: extractValue(message, ['Parking', '10.']),
-    foodPref: extractValue(message, ['Food Preference', '11.']),
+    // Extract name - look for patterns like "I'm [name]" or "this is [name]" or "name is [name]"
+    name: extractName(cleanMessage),
+    
+    // Extract phone - look for 10 digit numbers
+    phone: extractPhone(cleanMessage),
+    
+    // Extract configuration - look for "1BHK", "2BHK", "3BHK", "4BHK", etc.
+    configuration: extractConfiguration(cleanMessage),
+    
+    // Extract location - look for "in [location]" or "at [location]"
+    location: extractLocation(cleanMessage),
+    
+    // Extract budget - look for "budget of", "₹", "k", etc.
+    budgetRent: extractBudget(cleanMessage),
+    budgetDeposit: '',
+    
+    // Extract move-in date - look for date patterns
+    moveInDate: extractMoveInDate(cleanMessage),
+    
+    // Extract parking - look for "parking", "car", "vehicle"
+    parking: extractParking(cleanMessage),
+    
+    requirement: 'Rent',
+    furnishing: '',
+    tenantType: '',
+    foodPref: '',
   };
+  
   return data;
 }
 
 /**
- * Add record to Google Sheets (Tenants or Owners sheet)
+ * Extract name from natural language
+ */
+function extractName(message) {
+  // Try "I'm [name]" or "this is [name]" or "[name] here"
+  let match = message.match(/(?:I'm|this is|I am|name is|hello|hi)\s+([A-Za-z\s]+?)(?:\s+(?:here|from|and|i'm|looking|need)|\.|$)/i);
+  if (match) return match[1].trim();
+  
+  match = message.match(/^([A-Za-z\s]+?)\s+(?:here|speaking|looking|need)/i);
+  if (match) return match[1].trim();
+  
+  return '';
+}
+
+/**
+ * Extract phone number from natural language
+ */
+function extractPhone(message) {
+  // Look for 10 digit number
+  const match = message.match(/\b(\d{10})\b/);
+  return match ? match[1] : '';
+}
+
+/**
+ * Extract configuration (BHK) from natural language
+ */
+function extractConfiguration(message) {
+  // Look for "2 BHK", "2BHK", "3 bhk", etc.
+  const match = message.match(/(\d+\s*bhk|\d+bhk)/i);
+  return match ? match[1].replace(/\s+/g, '').toUpperCase() : '';
+}
+
+/**
+ * Extract location from natural language
+ */
+function extractLocation(message) {
+  // Look for "in [location]" or "at [location]"
+  let match = message.match(/(?:in|at|near|around)\s+([A-Za-z\s]+?)(?:\s+(?:with|and|budget|having|need|want)|,|$)/i);
+  if (match) return match[1].trim();
+  
+  return '';
+}
+
+/**
+ * Extract budget from natural language
+ */
+function extractBudget(message) {
+  // Look for "budget of 45k", "45k budget", "₹45000", etc.
+  let match = message.match(/budget\s+(?:of\s+)?([0-9.k]+)/i);
+  if (match) return match[1].trim();
+  
+  match = message.match(/₹\s*([0-9,]+)/);
+  if (match) return match[1].trim();
+  
+  match = message.match(/([0-9]+k)\b/i);
+  if (match) return match[1].trim();
+  
+  return '';
+}
+
+/**
+ * Extract move-in date from natural language
+ */
+function extractMoveInDate(message) {
+  // Look for "move in by", "by [date]", "from [date]", "on [date]"
+  let match = message.match(/(?:move\s+in\s+by|by|from|on)\s+([A-Za-z\s0-9]+?)(?:\s+(?:and|with|budget)|\.|$)/i);
+  if (match) return match[1].trim();
+  
+  return '';
+}
+
+/**
+ * Extract parking from natural language
+ */
+function extractParking(message) {
+  const lowerMessage = message.toLowerCase();
+  
+  if (lowerMessage.includes('parking') || lowerMessage.includes('car')) {
+    if (lowerMessage.includes('no') || lowerMessage.includes('without')) {
+      return 'No';
+    }
+    return 'Yes';
+  }
+  
+  return '';
+}
+
+/**
+ * Parse message - handles both structured form and natural language
+ */
+function parseMessage(message) {
+  let data;
+  
+  if (isStructuredForm(message)) {
+    // Handle structured form
+    const budget = extractBudgetStructured(message);
+    data = {
+      type: detectTypeFromKeywords(message),
+      name: extractValueStructured(message, ['Name', '1.']),
+      phone: extractValueStructured(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
+      requirement: extractValueStructured(message, ['Requirement', '3.']),
+      configuration: extractValueStructured(message, ['Configuration', '4.']),
+      furnishing: extractValueStructured(message, ['Furnishing', '5.']),
+      location: extractValueStructured(message, ['Location', 'Preferred Location', '6.']),
+      tenantType: extractValueStructured(message, ['Tenant Type', 'Occupancy Type', '7.']),
+      budgetRent: budget.rent,
+      budgetDeposit: budget.deposit,
+      moveInDate: extractValueStructured(message, ['Move-in Date', '9.']),
+      parking: extractValueStructured(message, ['Parking', '10.']),
+      foodPref: extractValueStructured(message, ['Food Preference', '11.']),
+    };
+  } else {
+    // Handle natural language
+    data = extractFromNaturalLanguage(message);
+    data.type = detectTypeFromKeywords(message);
+  }
+  
+  return data;
+}
+
+/**
+ * Add record to Google Sheets
  */
 async function addToGoogleSheets(message) {
   try {
@@ -139,28 +279,29 @@ async function addToGoogleSheets(message) {
     const parsedData = parseMessage(message);
     const customerName = parsedData.name || 'Unknown';
     const customerPhone = parsedData.phone || '';
-    const sheetName = parsedData.type === 'Owner' ? 'Owners' : 'Tenants';
+    const sheetName = parsedData.type === 'Owner' ? 'Owner' : 'Tenant';
 
     console.log(`Detected Type: ${parsedData.type}`);
     console.log(`Sheet: ${sheetName}`);
     console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
+    console.log(`Full extracted data:`, parsedData);
 
     // Prepare row data
     const rowData = [
-      new Date().toLocaleDateString('en-IN'), // Date
-      customerName, // Name
-      customerPhone, // WhatsApp / Contact Number
-      parsedData.requirement, // Requirement
-      parsedData.configuration, // Configuration
-      parsedData.furnishing, // Furnishing
-      parsedData.location, // Preferred Location
-      parsedData.tenantType, // Tenant Type / Occupancy Type
-      parsedData.budgetRent, // Budget - Rent / Rental
-      parsedData.budgetDeposit, // Budget - Deposit / Maintenance
-      parsedData.moveInDate, // Expected Move-in Date
-      parsedData.parking, // Car Parking Required
-      parsedData.foodPref, // Food Preference
-      '', // Notes
+      new Date().toLocaleDateString('en-IN'),
+      customerName,
+      customerPhone,
+      parsedData.requirement,
+      parsedData.configuration,
+      parsedData.furnishing,
+      parsedData.location,
+      parsedData.tenantType,
+      parsedData.budgetRent,
+      parsedData.budgetDeposit,
+      parsedData.moveInDate,
+      parsedData.parking,
+      parsedData.foodPref,
+      '',
     ];
 
     console.log('Row data to insert:', rowData);
