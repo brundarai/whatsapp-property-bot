@@ -1,8 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const twilio = require('twilio');
-const ExcelJS = require('exceljs');
-const axios = require('axios');
+const { google } = require('googleapis');
 require('dotenv').config();
 
 const app = express();
@@ -13,12 +12,31 @@ app.use(bodyParser.json());
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const TWILIO_PHONE = process.env.TWILIO_PHONE_NUMBER;
 
-// Microsoft Graph API credentials
-const GRAPH_API_TOKEN = process.env.MICROSOFT_GRAPH_TOKEN;
-const ONEDRIVE_FILE_ID = process.env.ONEDRIVE_FILE_ID;
+// Google Sheets configuration
+const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_EMAIL;
+const PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
+const PROJECT_ID = process.env.GOOGLE_PROJECT_ID;
+const PRIVATE_KEY_ID = process.env.GOOGLE_PRIVATE_KEY_ID;
+const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 
-// Your business number to ignore
-const BUSINESS_PHONE = '919380729579';
+// Initialize Google Sheets API
+const auth = new google.auth.GoogleAuth({
+  credentials: {
+    type: 'service_account',
+    project_id: PROJECT_ID,
+    private_key_id: PRIVATE_KEY_ID,
+    private_key: PRIVATE_KEY ? PRIVATE_KEY.replace(/\\n/g, '\n') : '',
+    client_email: SERVICE_ACCOUNT_EMAIL,
+    client_id: CLIENT_ID,
+    auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    auth_provider_x509_cert_url: 'https://www.googleapis.com/oauth2/v1/certs',
+  },
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+
+const sheets = google.sheets({ version: 'v4', auth });
 
 /**
  * Extract data from message
@@ -55,61 +73,11 @@ function extractValue(message, keywords) {
 }
 
 /**
- * Get file from OneDrive and add record
+ * Add record to Google Sheets
  */
-async function addToOneDrive(message) {
+async function addToGoogleSheets(message) {
   try {
-    console.log('Starting OneDrive upload...');
-    console.log('Token:', GRAPH_API_TOKEN ? 'Present' : 'Missing');
-    console.log('File ID:', ONEDRIVE_FILE_ID ? 'Present' : 'Missing');
-
-    // Download current file
-    const downloadUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${ONEDRIVE_FILE_ID}/content`;
-    console.log('Downloading from:', downloadUrl);
-
-    const response = await axios.get(downloadUrl, {
-      headers: {
-        'Authorization': `Bearer ${GRAPH_API_TOKEN}`
-      },
-      responseType: 'arraybuffer'
-    });
-
-    console.log('File downloaded successfully');
-
-    // Load workbook
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(response.data);
-    
-    // Get or create sheet
-    let worksheet = workbook.getWorksheet('NammaHood Database');
-    if (!worksheet) {
-      console.log('Creating new sheet: NammaHood Database');
-      worksheet = workbook.addWorksheet('NammaHood Database');
-      worksheet.columns = [
-        { header: 'Date', key: 'date', width: 12 },
-        { header: 'Type', key: 'type', width: 10 },
-        { header: 'Name', key: 'name', width: 15 },
-        { header: 'Phone', key: 'phone', width: 15 },
-        { header: 'Requirement', key: 'requirement', width: 12 },
-        { header: 'Configuration', key: 'configuration', width: 12 },
-        { header: 'Furnishing', key: 'furnishing', width: 15 },
-        { header: 'Location', key: 'location', width: 20 },
-        { header: 'Tenant Type', key: 'tenantType', width: 12 },
-        { header: 'Budget', key: 'budget', width: 15 },
-        { header: 'Move-in Date', key: 'moveInDate', width: 15 },
-        { header: 'Parking', key: 'parking', width: 12 },
-        { header: 'Food Preference', key: 'foodPref', width: 12 },
-        { header: 'Notes', key: 'notes', width: 20 },
-      ];
-      
-      // Format header
-      worksheet.getRow(1).font = { bold: true };
-      worksheet.getRow(1).fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFD3D3D3' }
-      };
-    }
+    console.log('Starting Google Sheets upload...');
 
     // Parse message
     const parsedData = parseMessage(message);
@@ -118,44 +86,38 @@ async function addToOneDrive(message) {
 
     console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
 
-    // Add new row
-    const row = {
-      date: new Date().toLocaleDateString('en-IN'),
-      type: '',
-      name: customerName,
-      phone: customerPhone,
-      requirement: parsedData.requirement,
-      configuration: parsedData.configuration,
-      furnishing: parsedData.furnishing,
-      location: parsedData.location,
-      tenantType: parsedData.tenantType,
-      budget: parsedData.budget,
-      moveInDate: parsedData.moveInDate,
-      parking: parsedData.parking,
-      foodPref: parsedData.foodPref,
-      notes: '',
-    };
+    // Prepare row data
+    const rowData = [
+      new Date().toLocaleDateString('en-IN'), // Date
+      '', // Type (Owner/Tenant) - user fills manually
+      customerName,
+      customerPhone,
+      parsedData.requirement,
+      parsedData.configuration,
+      parsedData.furnishing,
+      parsedData.location,
+      parsedData.tenantType,
+      parsedData.budget,
+      parsedData.moveInDate,
+      parsedData.parking,
+      parsedData.foodPref,
+      '', // Notes
+    ];
 
-    worksheet.addRow(row);
-    console.log('Row added to worksheet');
-
-    // Convert to buffer
-    const buffer = await workbook.xlsx.writeBuffer();
-    console.log('Buffer created, uploading to OneDrive...');
-
-    // Upload back to OneDrive
-    const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${ONEDRIVE_FILE_ID}/content`;
-    await axios.put(uploadUrl, buffer, {
-      headers: {
-        'Authorization': `Bearer ${GRAPH_API_TOKEN}`,
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      }
+    // Append to Google Sheets
+    const response = await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: 'Sheet1!A:N',
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [rowData],
+      },
     });
 
-    console.log(`✅ Record added to OneDrive NammaHood Database`);
+    console.log(`✅ Record added to Google Sheets`);
     return true;
   } catch (error) {
-    console.error('Error adding to OneDrive:', error.response?.data || error.message);
+    console.error('Error adding to Google Sheets:', error.message);
     throw error;
   }
 }
@@ -199,10 +161,10 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Add to OneDrive (extracts customer name/phone from message, not from sender)
-    await addToOneDrive(messageBody);
+    // Add to Google Sheets
+    await addToGoogleSheets(messageBody);
 
-    // Send confirmation (send to whoever sent the message)
+    // Send confirmation
     await sendConfirmation(fromPhone);
 
     res.sendStatus(200);
