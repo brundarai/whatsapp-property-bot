@@ -39,11 +39,21 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 
 /**
- * Detect if message is structured form or free-form natural language
+ * Detect message format type
  */
-function isStructuredForm(message) {
+function detectMessageFormat(message) {
   // Check for numbered format like "1. Name –" or "1. Name -"
-  return /^\d+\.\s+\w+\s+[–-]/m.test(message);
+  if (/^\d+\.\s+\w+\s+[–-]/m.test(message)) {
+    return 'numbered';
+  }
+  
+  // Check for key-value format like "Name - value" or "Budget - value"
+  if (/^[A-Za-z\s]+-\s+/m.test(message)) {
+    return 'keyvalue';
+  }
+  
+  // Default to natural language
+  return 'natural';
 }
 
 /**
@@ -83,9 +93,106 @@ function detectTypeFromKeywords(message) {
 }
 
 /**
- * Extract value from structured form message
+ * Extract from key-value format
+ * Format: "Budget - 30 to 35 including maintenance"
  */
-function extractValueStructured(message, keywords) {
+function extractFromKeyValue(message) {
+  console.log('Extracting from KEY-VALUE format');
+  
+  const lines = message.split('\n');
+  const keyValueMap = {};
+  const extraNotes = [];
+  
+  lines.forEach(line => {
+    line = line.trim();
+    if (!line) return;
+    
+    // Match "Key - Value" or "Key - " format
+    const match = line.match(/^([A-Za-z\s]+?)\s*-\s*(.*)$/);
+    
+    if (match) {
+      const key = match[1].trim().toLowerCase();
+      const value = match[2].trim();
+      keyValueMap[key] = value;
+      console.log(`Found: ${key} = ${value}`);
+    } else {
+      // Line doesn't have a key, treat as extra note
+      extraNotes.push(line);
+      console.log(`Extra note: ${line}`);
+    }
+  });
+  
+  // Extract specific fields
+  const data = {
+    name: keyValueMap['sreeraj'] || keyValueMap['name'] || '',
+    phone: extractPhoneFromString(keyValueMap['sreeraj'] || keyValueMap['phone'] || ''),
+    location: keyValueMap['location'] || keyValueMap['preferred location'] || '',
+    budgetRent: keyValueMap['budget'] || '',
+    budgetDeposit: '',
+    requirement: 'Rent',
+    configuration: '',
+    furnishing: '',
+    tenantType: '',
+    moveInDate: '',
+    parking: '',
+    foodPref: '',
+    notes: buildNotes(keyValueMap, extraNotes),
+  };
+  
+  return data;
+}
+
+/**
+ * Extract phone number from a string
+ */
+function extractPhoneFromString(str) {
+  if (!str) return '';
+  
+  // Look for "+91 98809 37953" format with spaces
+  let match = str.match(/\+91\s*(\d{5})\s*(\d{5})/);
+  if (match) return `${match[1]}${match[2]}`;
+  
+  // Look for "+91 9880937953" format
+  match = str.match(/\+91\s*(\d{10})/);
+  if (match) return match[1];
+  
+  // Look for just "98809 37953" (without +91)
+  match = str.match(/\b(\d{5})\s+(\d{5})\b/);
+  if (match) return `${match[1]}${match[2]}`;
+  
+  // Look for 10 digit number
+  match = str.match(/\b(\d{10})\b/);
+  if (match) return match[1];
+  
+  return '';
+}
+
+/**
+ * Build notes from extra fields
+ */
+function buildNotes(keyValueMap, extraLines) {
+  const notesParts = [];
+  
+  // Add fields that don't fit into main columns
+  if (keyValueMap['work location']) {
+    notesParts.push(`Work Location: ${keyValueMap['work location']}`);
+  }
+  if (keyValueMap['notes']) {
+    notesParts.push(`Notes: ${keyValueMap['notes']}`);
+  }
+  
+  // Add extra lines
+  extraLines.forEach(line => {
+    notesParts.push(line);
+  });
+  
+  return notesParts.join('; ');
+}
+
+/**
+ * Extract value from numbered format
+ */
+function extractValueNumbered(message, keywords) {
   for (const keyword of keywords) {
     const regex = new RegExp(`${keyword}[^–-]*[–-]\\s*([^\\n•]+)`, 'i');
     const match = message.match(regex);
@@ -99,9 +206,9 @@ function extractValueStructured(message, keywords) {
 }
 
 /**
- * Extract budget from structured form
+ * Extract budget from numbered format
  */
-function extractBudgetStructured(message) {
+function extractBudgetNumbered(message) {
   const rentRegex = /Rent\s*–\s*([^•\n]+)/i;
   const depositRegex = /Deposit\s*–\s*([^•\n]+)/i;
   
@@ -115,39 +222,53 @@ function extractBudgetStructured(message) {
 }
 
 /**
- * Extract data from free-form natural language message
+ * Extract from natural language
  */
 function extractFromNaturalLanguage(message) {
-  // Remove "Tenant:" or "Owner:" prefix if present
+  console.log('Extracting from NATURAL LANGUAGE format');
+  
   let cleanMessage = message.replace(/^(tenant|owner):\s*/i, '');
   
   const data = {
-    // Extract name - look for patterns like "I'm [name]" or "this is [name]" or "name is [name]"
     name: extractName(cleanMessage),
-    
-    // Extract phone - look for 10 digit numbers
     phone: extractPhone(cleanMessage),
-    
-    // Extract configuration - look for "1BHK", "2BHK", "3BHK", "4BHK", etc.
     configuration: extractConfiguration(cleanMessage),
-    
-    // Extract location - look for "in [location]" or "at [location]"
     location: extractLocation(cleanMessage),
-    
-    // Extract budget - look for "budget of", "₹", "k", etc.
     budgetRent: extractBudget(cleanMessage),
     budgetDeposit: '',
-    
-    // Extract move-in date - look for date patterns
-    moveInDate: extractMoveInDate(cleanMessage),
-    
-    // Extract parking - look for "parking", "car", "vehicle"
-    parking: extractParking(cleanMessage),
-    
     requirement: 'Rent',
     furnishing: '',
     tenantType: '',
+    moveInDate: extractMoveInDate(cleanMessage),
+    parking: extractParking(cleanMessage),
     foodPref: '',
+    notes: '',
+  };
+  
+  return data;
+}
+
+/**
+ * Extract from numbered format
+ */
+function extractFromNumbered(message) {
+  console.log('Extracting from NUMBERED format');
+  
+  const budget = extractBudgetNumbered(message);
+  const data = {
+    name: extractValueNumbered(message, ['Name', '1.']),
+    phone: extractValueNumbered(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
+    requirement: extractValueNumbered(message, ['Requirement', '3.']),
+    configuration: extractValueNumbered(message, ['Configuration', '4.']),
+    furnishing: extractValueNumbered(message, ['Furnishing', '5.']),
+    location: extractValueNumbered(message, ['Location', 'Preferred Location', '6.']),
+    tenantType: extractValueNumbered(message, ['Tenant Type', 'Occupancy Type', '7.']),
+    budgetRent: budget.rent,
+    budgetDeposit: budget.deposit,
+    moveInDate: extractValueNumbered(message, ['Move-in Date', '9.']),
+    parking: extractValueNumbered(message, ['Parking', '10.']),
+    foodPref: extractValueNumbered(message, ['Food Preference', '11.']),
+    notes: '',
   };
   
   return data;
@@ -161,8 +282,16 @@ function extractName(message) {
   let match = message.match(/^[A-Za-z]+,?\s+([A-Za-z]+)\s+here/i);
   if (match) return match[1].trim();
   
-  // Try "I'm [name]" or "this is [name]" or "[name] here"
-  match = message.match(/(?:I'm|this is|I am|name is|hello|hi)\s+([A-Za-z\s]+?)(?:\s+(?:here|from|and|i'm|looking|need)|\.|$)/i);
+  // Try "[Name] - +phone" or "[Name] +phone" format
+  match = message.match(/^([A-Za-z]+)\s*-\s*\+?\d+/i);
+  if (match) return match[1].trim();
+  
+  // Try line with name before phone
+  match = message.match(/([A-Za-z]+)\s*-\s*\+91\s*\d+/i);
+  if (match) return match[1].trim();
+  
+  // Try "I'm [name]" or "this is [name]"
+  match = message.match(/(?:I'm|this is|I am|name is)\s+([A-Za-z\s]+?)(?:\s+(?:here|from|and|i'm|looking|need)|\.|$)/i);
   if (match) return match[1].trim();
   
   // Try just "[Name] here"
@@ -177,19 +306,16 @@ function extractName(message) {
 }
 
 /**
- * Extract phone number from natural language
+ * Extract phone from natural language
  */
 function extractPhone(message) {
-  // Look for 10 digit number
-  const match = message.match(/\b(\d{10})\b/);
-  return match ? match[1] : '';
+  return extractPhoneFromString(message);
 }
 
 /**
- * Extract configuration (BHK) from natural language
+ * Extract configuration (BHK)
  */
 function extractConfiguration(message) {
-  // Look for "2 BHK", "2BHK", "3 bhk", etc.
   const match = message.match(/(\d+\s*bhk|\d+bhk)/i);
   return match ? match[1].replace(/\s+/g, '').toUpperCase() : '';
 }
@@ -198,15 +324,12 @@ function extractConfiguration(message) {
  * Extract location from natural language
  */
 function extractLocation(message) {
-  // Look for "in [location]" or "at [location]"
-  let match = message.match(/(?:in|at|near|around)\s+([A-Za-z\s]+?)(?:\s+(?:with|and|budget|having|need|want|will)|,|$)/i);
+  let match = message.match(/(?:in|at|near|around)\s+([A-Za-z\s]+?)(?:\s+(?:with|and|budget|having|need|want|will)|\n|,|$)/i);
   if (match) return match[1].trim();
   
-  // Look for location after BHK mention
-  match = message.match(/\d+\s*bhk\s+(?:in|at|near)\s+([A-Za-z\s]+?)(?:\s|,|$)/i);
+  match = message.match(/\d+\s*bhk\s+(?:in|at|near)\s+([A-Za-z\s]+?)(?:\s|\n|,|$)/i);
   if (match) return match[1].trim();
   
-  // Look for capitalized words (potential location names)
   match = message.match(/(?:in|at|near)\s+([A-Z][a-z]+)/i);
   if (match) return match[1].trim();
   
@@ -214,11 +337,13 @@ function extractLocation(message) {
 }
 
 /**
- * Extract budget from natural language
+ * Extract budget
  */
 function extractBudget(message) {
-  // Look for "budget of 45k", "45k budget", "₹45000", "20-25k", etc.
-  let match = message.match(/budget\s+(?:of\s+)?([0-9.k-]+)/i);
+  let match = message.match(/budget\s*-\s*([0-9]+\s+to\s+[0-9]+[k]?(?:\s+including\s+\w+)?)/i);
+  if (match) return match[1].trim();
+  
+  match = message.match(/budget\s+(?:of\s+)?([0-9.k-]+)/i);
   if (match) return match[1].trim();
   
   match = message.match(/₹\s*([0-9,]+)/);
@@ -234,10 +359,9 @@ function extractBudget(message) {
 }
 
 /**
- * Extract move-in date from natural language
+ * Extract move-in date
  */
 function extractMoveInDate(message) {
-  // Look for "move in by", "by [date]", "from [date]", "on [date]"
   let match = message.match(/(?:move\s+in\s+by|by|from|on)\s+([A-Za-z\s0-9]+?)(?:\s+(?:and|with|budget)|\.|$)/i);
   if (match) return match[1].trim();
   
@@ -245,7 +369,7 @@ function extractMoveInDate(message) {
 }
 
 /**
- * Extract parking from natural language
+ * Extract parking
  */
 function extractParking(message) {
   const lowerMessage = message.toLowerCase();
@@ -261,34 +385,24 @@ function extractParking(message) {
 }
 
 /**
- * Parse message - handles both structured form and natural language
+ * Parse message - handles all three formats
  */
 function parseMessage(message) {
+  const format = detectMessageFormat(message);
   let data;
   
-  if (isStructuredForm(message)) {
-    // Handle structured form
-    const budget = extractBudgetStructured(message);
-    data = {
-      type: detectTypeFromKeywords(message),
-      name: extractValueStructured(message, ['Name', '1.']),
-      phone: extractValueStructured(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
-      requirement: extractValueStructured(message, ['Requirement', '3.']),
-      configuration: extractValueStructured(message, ['Configuration', '4.']),
-      furnishing: extractValueStructured(message, ['Furnishing', '5.']),
-      location: extractValueStructured(message, ['Location', 'Preferred Location', '6.']),
-      tenantType: extractValueStructured(message, ['Tenant Type', 'Occupancy Type', '7.']),
-      budgetRent: budget.rent,
-      budgetDeposit: budget.deposit,
-      moveInDate: extractValueStructured(message, ['Move-in Date', '9.']),
-      parking: extractValueStructured(message, ['Parking', '10.']),
-      foodPref: extractValueStructured(message, ['Food Preference', '11.']),
-    };
+  console.log(`Detected format: ${format}`);
+  
+  if (format === 'numbered') {
+    data = extractFromNumbered(message);
+  } else if (format === 'keyvalue') {
+    data = extractFromKeyValue(message);
   } else {
-    // Handle natural language
     data = extractFromNaturalLanguage(message);
-    data.type = detectTypeFromKeywords(message);
   }
+  
+  // Add type detection
+  data.type = detectTypeFromKeywords(message);
   
   return data;
 }
@@ -326,7 +440,7 @@ async function addToGoogleSheets(message) {
       parsedData.moveInDate,
       parsedData.parking,
       parsedData.foodPref,
-      '',
+      parsedData.notes,
     ];
 
     console.log('Row data to insert:', rowData);
@@ -350,7 +464,7 @@ async function addToGoogleSheets(message) {
 }
 
 /**
- * Send WhatsApp message confirmation
+ * Send WhatsApp confirmation
  */
 async function sendConfirmation(toPhone, type) {
   const confirmationMsg = `✅ Thanks for your inquiry!\n\nYour ${type.toLowerCase()} information has been saved.\n\nWe'll get back to you soon!`;
@@ -373,7 +487,7 @@ async function sendConfirmation(toPhone, type) {
 }
 
 /**
- * Main webhook endpoint for Twilio
+ * Main webhook
  */
 app.post('/webhook', async (req, res) => {
   const messageBody = req.body.Body;
@@ -405,7 +519,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 /**
- * Health check endpoint
+ * Health check
  */
 app.get('/health', (req, res) => {
   res.json({ status: 'Bot is running!' });
