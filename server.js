@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const twilio = require('twilio');
 const { google } = require('googleapis');
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 require('dotenv').config();
 
 const app = express();
@@ -11,6 +12,9 @@ app.use(bodyParser.json());
 // Initialize Twilio client
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const TWILIO_PHONE = process.env.TWILIO_PHONE_NUMBER;
+
+// Anthropic API
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // Google Sheets configuration
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
@@ -39,372 +43,93 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 
 /**
- * Detect message format type
+ * Use Claude AI to intelligently extract data from message
  */
-function detectMessageFormat(message) {
-  // Check for numbered format like "1. Name –" or "1. Name -"
-  if (/^\d+\.\s+\w+\s+[–-]/m.test(message)) {
-    return 'numbered';
-  }
-  
-  // Check for key-value format like "Name - value" or "Budget - value"
-  if (/^[A-Za-z\s]+-\s+/m.test(message)) {
-    return 'keyvalue';
-  }
-  
-  // Default to natural language
-  return 'natural';
-}
-
-/**
- * Detect Tenant or Owner from keywords
- */
-function detectTypeFromKeywords(message) {
-  const lowerMessage = message.toLowerCase();
-  
-  // Check for explicit mention first
-  if (lowerMessage.includes('tenant:') || lowerMessage.match(/^tenant\s/i)) {
-    return 'Tenant';
-  } else if (lowerMessage.includes('owner:') || lowerMessage.match(/^owner\s/i)) {
-    return 'Owner';
-  }
-  
-  // Check for keywords - Tenant
-  const tenantKeywords = ['looking for', 'looking', 'need', 'seeking', 'want', 'search', 'require', 'budget', 'searching'];
-  
-  // Check for keywords - Owner
-  const ownerKeywords = ['property', 'listing', 'available', 'for rent', 'rental', 'lease', 'let out', 'have a', 'own a'];
-  
-  let tenantCount = 0;
-  let ownerCount = 0;
-  
-  tenantKeywords.forEach(keyword => {
-    if (lowerMessage.includes(keyword)) tenantCount++;
-  });
-  
-  ownerKeywords.forEach(keyword => {
-    if (lowerMessage.includes(keyword)) ownerCount++;
-  });
-  
-  console.log(`Type detection - Tenant keywords: ${tenantCount}, Owner keywords: ${ownerCount}`);
-  
-  // Default to Tenant if Tenant keywords found, otherwise Owner
-  return tenantCount > ownerCount ? 'Tenant' : 'Owner';
-}
-
-/**
- * Extract from key-value format
- * Format: "Budget - 30 to 35 including maintenance"
- */
-function extractFromKeyValue(message) {
-  console.log('Extracting from KEY-VALUE format');
-  
-  const lines = message.split('\n');
-  const keyValueMap = {};
-  const extraNotes = [];
-  
-  lines.forEach(line => {
-    line = line.trim();
-    if (!line) return;
+async function extractDataWithClaude(message) {
+  try {
+    console.log('Using Claude AI for intelligent extraction...');
     
-    // Match "Key - Value" or "Key - " format
-    const match = line.match(/^([A-Za-z\s]+?)\s*-\s*(.*)$/);
-    
-    if (match) {
-      const key = match[1].trim().toLowerCase();
-      const value = match[2].trim();
-      keyValueMap[key] = value;
-      console.log(`Found: ${key} = ${value}`);
-    } else {
-      // Line doesn't have a key, treat as extra note
-      extraNotes.push(line);
-      console.log(`Extra note: ${line}`);
+    const prompt = `You are an expert at extracting property rental/listing information from unstructured messages.
+
+Extract the following information from this message and return ONLY a valid JSON object. 
+If a field is not mentioned, use empty string "".
+Be smart about understanding context - names are person names, numbers with "k" or "k" are budgets, locations are place names, etc.
+
+Message:
+${message}
+
+Return ONLY this JSON (no other text):
+{
+  "name": "person's name if mentioned",
+  "phone": "10-digit phone number without +91 or spaces (e.g., 9880937953)",
+  "type": "Tenant or Owner based on context (looking for = Tenant, have property = Owner)",
+  "requirement": "Rent or Buy or Lease",
+  "configuration": "1BHK, 2BHK, 3BHK, etc. if mentioned",
+  "furnishing": "Furnished, Semi-Furnished, Unfurnished if mentioned",
+  "location": "primary location/area name",
+  "tenantType": "Family, Bachelor, Working Professional if mentioned",
+  "budgetRent": "budget amount as mentioned (e.g., '30-35k', '45000', '20-25k including maintenance')",
+  "budgetDeposit": "deposit amount if mentioned separately",
+  "moveInDate": "move in date if mentioned",
+  "parking": "Yes or No or specific parking type if mentioned",
+  "foodPref": "Veg or Non-veg if mentioned",
+  "notes": "any other important details like work location, pet friendly, power backup, radius, etc."
+}`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 1000,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('Claude API error:', errorData);
+      throw new Error(`Claude API error: ${errorData.error?.message || response.statusText}`);
     }
-  });
-  
-  // Extract specific fields
-  const data = {
-    name: keyValueMap['sreeraj'] || keyValueMap['name'] || '',
-    phone: extractPhoneFromString(keyValueMap['sreeraj'] || keyValueMap['phone'] || ''),
-    location: keyValueMap['location'] || keyValueMap['preferred location'] || '',
-    budgetRent: keyValueMap['budget'] || '',
-    budgetDeposit: '',
-    requirement: 'Rent',
-    configuration: '',
-    furnishing: '',
-    tenantType: '',
-    moveInDate: '',
-    parking: '',
-    foodPref: '',
-    notes: buildNotes(keyValueMap, extraNotes),
-  };
-  
-  return data;
-}
 
-/**
- * Extract phone number from a string
- */
-function extractPhoneFromString(str) {
-  if (!str) return '';
-  
-  // Look for "+91 98809 37953" format with spaces
-  let match = str.match(/\+91\s*(\d{5})\s*(\d{5})/);
-  if (match) return `${match[1]}${match[2]}`;
-  
-  // Look for "+91 9880937953" format
-  match = str.match(/\+91\s*(\d{10})/);
-  if (match) return match[1];
-  
-  // Look for just "98809 37953" (without +91)
-  match = str.match(/\b(\d{5})\s+(\d{5})\b/);
-  if (match) return `${match[1]}${match[2]}`;
-  
-  // Look for 10 digit number
-  match = str.match(/\b(\d{10})\b/);
-  if (match) return match[1];
-  
-  return '';
-}
+    const data = await response.json();
+    console.log('Claude response:', data);
 
-/**
- * Build notes from extra fields
- */
-function buildNotes(keyValueMap, extraLines) {
-  const notesParts = [];
-  
-  // Add fields that don't fit into main columns
-  if (keyValueMap['work location']) {
-    notesParts.push(`Work Location: ${keyValueMap['work location']}`);
-  }
-  if (keyValueMap['notes']) {
-    notesParts.push(`Notes: ${keyValueMap['notes']}`);
-  }
-  
-  // Add extra lines
-  extraLines.forEach(line => {
-    notesParts.push(line);
-  });
-  
-  return notesParts.join('; ');
-}
+    // Extract the JSON from Claude's response
+    const responseText = data.content[0].text;
+    console.log('Claude text response:', responseText);
 
-/**
- * Extract value from numbered format
- */
-function extractValueNumbered(message, keywords) {
-  for (const keyword of keywords) {
-    const regex = new RegExp(`${keyword}[^–-]*[–-]\\s*([^\\n•]+)`, 'i');
-    const match = message.match(regex);
-    if (match) {
-      let answer = match[1].trim();
-      answer = answer.split('/')[0].trim();
-      return answer;
+    // Try to parse JSON from the response
+    let extractedData = {};
+    try {
+      extractedData = JSON.parse(responseText);
+    } catch (parseError) {
+      // Try to extract JSON from the response text
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        extractedData = JSON.parse(jsonMatch[0]);
+      } else {
+        console.error('Could not parse Claude response as JSON');
+        throw parseError;
+      }
     }
+
+    console.log('Extracted data:', extractedData);
+    return extractedData;
+
+  } catch (error) {
+    console.error('Error calling Claude API:', error);
+    throw error;
   }
-  return '';
-}
-
-/**
- * Extract budget from numbered format
- */
-function extractBudgetNumbered(message) {
-  const rentRegex = /Rent\s*–\s*([^•\n]+)/i;
-  const depositRegex = /Deposit\s*–\s*([^•\n]+)/i;
-  
-  const rentMatch = message.match(rentRegex);
-  const depositMatch = message.match(depositRegex);
-  
-  return {
-    rent: rentMatch ? rentMatch[1].trim() : '',
-    deposit: depositMatch ? depositMatch[1].trim() : ''
-  };
-}
-
-/**
- * Extract from natural language
- */
-function extractFromNaturalLanguage(message) {
-  console.log('Extracting from NATURAL LANGUAGE format');
-  
-  let cleanMessage = message.replace(/^(tenant|owner):\s*/i, '');
-  
-  const data = {
-    name: extractName(cleanMessage),
-    phone: extractPhone(cleanMessage),
-    configuration: extractConfiguration(cleanMessage),
-    location: extractLocation(cleanMessage),
-    budgetRent: extractBudget(cleanMessage),
-    budgetDeposit: '',
-    requirement: 'Rent',
-    furnishing: '',
-    tenantType: '',
-    moveInDate: extractMoveInDate(cleanMessage),
-    parking: extractParking(cleanMessage),
-    foodPref: '',
-    notes: '',
-  };
-  
-  return data;
-}
-
-/**
- * Extract from numbered format
- */
-function extractFromNumbered(message) {
-  console.log('Extracting from NUMBERED format');
-  
-  const budget = extractBudgetNumbered(message);
-  const data = {
-    name: extractValueNumbered(message, ['Name', '1.']),
-    phone: extractValueNumbered(message, ['WhatsApp / Contact Number', 'Contact Number', '2.']),
-    requirement: extractValueNumbered(message, ['Requirement', '3.']),
-    configuration: extractValueNumbered(message, ['Configuration', '4.']),
-    furnishing: extractValueNumbered(message, ['Furnishing', '5.']),
-    location: extractValueNumbered(message, ['Location', 'Preferred Location', '6.']),
-    tenantType: extractValueNumbered(message, ['Tenant Type', 'Occupancy Type', '7.']),
-    budgetRent: budget.rent,
-    budgetDeposit: budget.deposit,
-    moveInDate: extractValueNumbered(message, ['Move-in Date', '9.']),
-    parking: extractValueNumbered(message, ['Parking', '10.']),
-    foodPref: extractValueNumbered(message, ['Food Preference', '11.']),
-    notes: '',
-  };
-  
-  return data;
-}
-
-/**
- * Extract name from natural language
- */
-function extractName(message) {
-  // Try "Brunda here" or "[name] here" (at start)
-  let match = message.match(/^[A-Za-z]+,?\s+([A-Za-z]+)\s+here/i);
-  if (match) return match[1].trim();
-  
-  // Try "[Name] - +phone" or "[Name] +phone" format
-  match = message.match(/^([A-Za-z]+)\s*-\s*\+?\d+/i);
-  if (match) return match[1].trim();
-  
-  // Try line with name before phone
-  match = message.match(/([A-Za-z]+)\s*-\s*\+91\s*\d+/i);
-  if (match) return match[1].trim();
-  
-  // Try "I'm [name]" or "this is [name]"
-  match = message.match(/(?:I'm|this is|I am|name is)\s+([A-Za-z\s]+?)(?:\s+(?:here|from|and|i'm|looking|need)|\.|$)/i);
-  if (match) return match[1].trim();
-  
-  // Try just "[Name] here"
-  match = message.match(/\b([A-Z][a-z]+)\s+here\b/i);
-  if (match) return match[1].trim();
-  
-  // Try at start of message (first capitalized word)
-  match = message.match(/^([A-Z][a-z]+)/);
-  if (match) return match[1].trim();
-  
-  return '';
-}
-
-/**
- * Extract phone from natural language
- */
-function extractPhone(message) {
-  return extractPhoneFromString(message);
-}
-
-/**
- * Extract configuration (BHK)
- */
-function extractConfiguration(message) {
-  const match = message.match(/(\d+\s*bhk|\d+bhk)/i);
-  return match ? match[1].replace(/\s+/g, '').toUpperCase() : '';
-}
-
-/**
- * Extract location from natural language
- */
-function extractLocation(message) {
-  let match = message.match(/(?:in|at|near|around)\s+([A-Za-z\s]+?)(?:\s+(?:with|and|budget|having|need|want|will)|\n|,|$)/i);
-  if (match) return match[1].trim();
-  
-  match = message.match(/\d+\s*bhk\s+(?:in|at|near)\s+([A-Za-z\s]+?)(?:\s|\n|,|$)/i);
-  if (match) return match[1].trim();
-  
-  match = message.match(/(?:in|at|near)\s+([A-Z][a-z]+)/i);
-  if (match) return match[1].trim();
-  
-  return '';
-}
-
-/**
- * Extract budget
- */
-function extractBudget(message) {
-  let match = message.match(/budget\s*-\s*([0-9]+\s+to\s+[0-9]+[k]?(?:\s+including\s+\w+)?)/i);
-  if (match) return match[1].trim();
-  
-  match = message.match(/budget\s+(?:of\s+)?([0-9.k-]+)/i);
-  if (match) return match[1].trim();
-  
-  match = message.match(/₹\s*([0-9,]+)/);
-  if (match) return match[1].trim();
-  
-  match = message.match(/([0-9]+-?[0-9]*k)\b/i);
-  if (match) return match[1].trim();
-  
-  match = message.match(/([0-9,]+)\s*(?:budget|per month|pm)/i);
-  if (match) return match[1].trim();
-  
-  return '';
-}
-
-/**
- * Extract move-in date
- */
-function extractMoveInDate(message) {
-  let match = message.match(/(?:move\s+in\s+by|by|from|on)\s+([A-Za-z\s0-9]+?)(?:\s+(?:and|with|budget)|\.|$)/i);
-  if (match) return match[1].trim();
-  
-  return '';
-}
-
-/**
- * Extract parking
- */
-function extractParking(message) {
-  const lowerMessage = message.toLowerCase();
-  
-  if (lowerMessage.includes('parking') || lowerMessage.includes('car')) {
-    if (lowerMessage.includes('no') || lowerMessage.includes('without')) {
-      return 'No';
-    }
-    return 'Yes';
-  }
-  
-  return '';
-}
-
-/**
- * Parse message - handles all three formats
- */
-function parseMessage(message) {
-  const format = detectMessageFormat(message);
-  let data;
-  
-  console.log(`Detected format: ${format}`);
-  
-  if (format === 'numbered') {
-    data = extractFromNumbered(message);
-  } else if (format === 'keyvalue') {
-    data = extractFromKeyValue(message);
-  } else {
-    data = extractFromNaturalLanguage(message);
-  }
-  
-  // Add type detection
-  data.type = detectTypeFromKeywords(message);
-  
-  return data;
 }
 
 /**
@@ -414,33 +139,34 @@ async function addToGoogleSheets(message) {
   try {
     console.log('Starting Google Sheets upload...');
 
-    // Parse message
-    const parsedData = parseMessage(message);
+    // Use Claude to extract data
+    const parsedData = await extractDataWithClaude(message);
+
     const customerName = parsedData.name || 'Unknown';
     const customerPhone = parsedData.phone || '';
-    const sheetName = parsedData.type === 'Owner' ? 'Owner' : 'Tenant';
+    const type = parsedData.type || 'Tenant';
+    const sheetName = type === 'Owner' ? 'Owner' : 'Tenant';
 
-    console.log(`Detected Type: ${parsedData.type}`);
+    console.log(`Detected Type: ${type}`);
     console.log(`Sheet: ${sheetName}`);
     console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
-    console.log(`Full extracted data:`, parsedData);
 
     // Prepare row data
     const rowData = [
       new Date().toLocaleDateString('en-IN'),
       customerName,
       customerPhone,
-      parsedData.requirement,
-      parsedData.configuration,
-      parsedData.furnishing,
-      parsedData.location,
-      parsedData.tenantType,
-      parsedData.budgetRent,
-      parsedData.budgetDeposit,
-      parsedData.moveInDate,
-      parsedData.parking,
-      parsedData.foodPref,
-      parsedData.notes,
+      parsedData.requirement || '',
+      parsedData.configuration || '',
+      parsedData.furnishing || '',
+      parsedData.location || '',
+      parsedData.tenantType || '',
+      parsedData.budgetRent || '',
+      parsedData.budgetDeposit || '',
+      parsedData.moveInDate || '',
+      parsedData.parking || '',
+      parsedData.foodPref || '',
+      parsedData.notes || '',
     ];
 
     console.log('Row data to insert:', rowData);
@@ -456,7 +182,8 @@ async function addToGoogleSheets(message) {
     });
 
     console.log(`✅ Record added to ${sheetName} sheet`);
-    return true;
+    return { success: true, data: parsedData, sheetName };
+
   } catch (error) {
     console.error('Error adding to Google Sheets:', error.message);
     throw error;
@@ -502,18 +229,32 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Parse to get type
-    const parsedData = parseMessage(messageBody);
-
-    // Add to Google Sheets
-    await addToGoogleSheets(messageBody);
+    // Extract data using Claude AI
+    const result = await addToGoogleSheets(messageBody);
 
     // Send confirmation
-    await sendConfirmation(fromPhone, parsedData.type);
+    await sendConfirmation(fromPhone, result.data.type || 'Tenant');
 
     res.sendStatus(200);
   } catch (error) {
     console.error('Error processing message:', error);
+    
+    // Send error message to user
+    try {
+      let fromPhone = TWILIO_PHONE;
+      if (fromPhone.startsWith('whatsapp:')) {
+        fromPhone = fromPhone.replace('whatsapp:', '');
+      }
+      
+      await client.messages.create({
+        from: `whatsapp:${fromPhone}`,
+        to: `whatsapp:${fromPhone}`,
+        body: `⚠️ There was an error processing your message. Please try again.`
+      });
+    } catch (sendError) {
+      console.error('Could not send error message:', sendError);
+    }
+    
     res.sendStatus(500);
   }
 });
@@ -522,11 +263,12 @@ app.post('/webhook', async (req, res) => {
  * Health check
  */
 app.get('/health', (req, res) => {
-  res.json({ status: 'Bot is running!' });
+  res.json({ status: 'Bot is running!', claude: 'enabled' });
 });
 
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 WhatsApp bot listening on port ${PORT}`);
+  console.log(`🧠 Claude AI integration: ENABLED`);
 });
