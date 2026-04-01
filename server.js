@@ -2,7 +2,6 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const twilio = require('twilio');
 const { google } = require('googleapis');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 require('dotenv').config();
 
 const app = express();
@@ -12,9 +11,6 @@ app.use(bodyParser.json());
 // Initialize Twilio client
 const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const TWILIO_PHONE = process.env.TWILIO_PHONE_NUMBER;
-
-// Anthropic API
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // Google Sheets configuration
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
@@ -43,93 +39,168 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 
 /**
- * Use Claude AI to intelligently extract data from message
+ * Parse message into structured data intelligently
  */
-async function extractDataWithClaude(message) {
-  try {
-    console.log('Using Claude AI for intelligent extraction...');
+function smartExtractData(message) {
+  console.log('🧠 Smart extraction starting...');
+  
+  const data = {
+    name: '',
+    phone: '',
+    type: 'Tenant',
+    requirement: 'Rent',
+    configuration: '',
+    furnishing: '',
+    location: '',
+    tenantType: '',
+    budgetRent: '',
+    budgetDeposit: '',
+    moveInDate: '',
+    parking: '',
+    foodPref: '',
+    notes: [],
+  };
+
+  const lines = message.split('\n').map(l => l.trim()).filter(l => l);
+  const keyValuePairs = {};
+  const freeTextLines = [];
+
+  console.log(`Processing ${lines.length} lines...`);
+
+  // Parse lines into key-value pairs or free text
+  lines.forEach((line, idx) => {
+    console.log(`Line ${idx}: "${line}"`);
     
-    const prompt = `You are an expert at extracting property rental/listing information from unstructured messages.
-
-Extract the following information from this message and return ONLY a valid JSON object. 
-If a field is not mentioned, use empty string "".
-Be smart about understanding context - names are person names, numbers with "k" or "k" are budgets, locations are place names, etc.
-
-Message:
-${message}
-
-Return ONLY this JSON (no other text):
-{
-  "name": "person's name if mentioned",
-  "phone": "10-digit phone number without +91 or spaces (e.g., 9880937953)",
-  "type": "Tenant or Owner based on context (looking for = Tenant, have property = Owner)",
-  "requirement": "Rent or Buy or Lease",
-  "configuration": "1BHK, 2BHK, 3BHK, etc. if mentioned",
-  "furnishing": "Furnished, Semi-Furnished, Unfurnished if mentioned",
-  "location": "primary location/area name",
-  "tenantType": "Family, Bachelor, Working Professional if mentioned",
-  "budgetRent": "budget amount as mentioned (e.g., '30-35k', '45000', '20-25k including maintenance')",
-  "budgetDeposit": "deposit amount if mentioned separately",
-  "moveInDate": "move in date if mentioned",
-  "parking": "Yes or No or specific parking type if mentioned",
-  "foodPref": "Veg or Non-veg if mentioned",
-  "notes": "any other important details like work location, pet friendly, power backup, radius, etc."
-}`;
-
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 1000,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error('Claude API error:', errorData);
-      throw new Error(`Claude API error: ${errorData.error?.message || response.statusText}`);
+    // Try to match "Key - Value" format
+    const kvMatch = line.match(/^([^-]+?)\s*-\s*(.+)$/);
+    
+    if (kvMatch) {
+      const key = kvMatch[1].trim().toLowerCase();
+      const value = kvMatch[2].trim();
+      keyValuePairs[key] = value;
+      console.log(`  → Key-Value: ${key} = ${value}`);
+    } else {
+      // Free text line
+      freeTextLines.push(line);
+      console.log(`  → Free text: ${line}`);
     }
+  });
 
-    const data = await response.json();
-    console.log('Claude response:', data);
+  console.log('Key-Value pairs:', keyValuePairs);
 
-    // Extract the JSON from Claude's response
-    const responseText = data.content[0].text;
-    console.log('Claude text response:', responseText);
-
-    // Try to parse JSON from the response
-    let extractedData = {};
-    try {
-      extractedData = JSON.parse(responseText);
-    } catch (parseError) {
-      // Try to extract JSON from the response text
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        extractedData = JSON.parse(jsonMatch[0]);
-      } else {
-        console.error('Could not parse Claude response as JSON');
-        throw parseError;
-      }
+  // Extract name - try multiple approaches
+  // 1. Check if there's a key like "sreeraj" (name mentioned as key)
+  const nameKeys = Object.keys(keyValuePairs).filter(k => 
+    !k.includes('location') && !k.includes('budget') && !k.includes('work') && 
+    !k.includes('radius') && !k.includes('preference') && k.length > 2
+  );
+  
+  if (nameKeys.length > 0 && keyValuePairs[nameKeys[0]].match(/\d/)) {
+    // This key has a phone number attached, so the key is likely the name
+    data.name = nameKeys[0].split(' ')[0]; // Get first part
+    if (nameKeys[0].includes(' ')) {
+      data.name = nameKeys[0]; // Full name if multiple words
     }
-
-    console.log('Extracted data:', extractedData);
-    return extractedData;
-
-  } catch (error) {
-    console.error('Error calling Claude API:', error);
-    throw error;
+    const phoneStr = keyValuePairs[nameKeys[0]];
+    data.phone = extractPhone(phoneStr);
+    console.log(`Found name from key-value: ${data.name}`);
+  } else {
+    // Try to extract from free text or other patterns
+    const nameMatch = message.match(/([A-Z][a-z]+)\s*-\s*\+91/i);
+    if (nameMatch) {
+      data.name = nameMatch[1];
+      console.log(`Found name before phone: ${data.name}`);
+    }
   }
+
+  // Extract phone number from message
+  if (!data.phone) {
+    data.phone = extractPhone(message);
+  }
+  console.log(`Extracted phone: ${data.phone}`);
+
+  // Extract location
+  data.location = keyValuePairs['location'] || keyValuePairs['preferred location'] || '';
+  console.log(`Extracted location: ${data.location}`);
+
+  // Extract budget
+  const budgetKey = Object.keys(keyValuePairs).find(k => k.includes('budget'));
+  if (budgetKey) {
+    data.budgetRent = keyValuePairs[budgetKey];
+  }
+  console.log(`Extracted budget: ${data.budgetRent}`);
+
+  // Extract work location
+  const workLocKey = Object.keys(keyValuePairs).find(k => k.includes('work'));
+  if (workLocKey) {
+    data.notes.push(`Work Location: ${keyValuePairs[workLocKey]}`);
+  }
+
+  // Extract other notes
+  const notesKey = Object.keys(keyValuePairs).find(k => k.includes('notes'));
+  if (notesKey) {
+    data.notes.push(keyValuePairs[notesKey]);
+  }
+
+  // Collect free text as additional notes
+  freeTextLines.forEach(line => {
+    if (!line.match(/^[a-z\s:]+$/i) || line.length > 5) {
+      data.notes.push(line);
+    }
+  });
+
+  // Detect type from keywords
+  const lowerMsg = message.toLowerCase();
+  if (lowerMsg.includes('looking for') || lowerMsg.includes('need') || lowerMsg.includes('want')) {
+    data.type = 'Tenant';
+  } else if (lowerMsg.includes('property') || lowerMsg.includes('listing') || lowerMsg.includes('available')) {
+    data.type = 'Owner';
+  }
+
+  data.notes = data.notes.join('; ');
+  console.log('Final extracted data:', data);
+  
+  return data;
+}
+
+/**
+ * Extract phone number from string
+ */
+function extractPhone(str) {
+  if (!str) return '';
+  
+  // Remove "whatsapp:" prefix if present
+  str = str.replace('whatsapp:', '');
+  
+  // Look for "+91 98809 37953" format with spaces
+  let match = str.match(/\+91\s*(\d{5})\s*(\d{5})/);
+  if (match) {
+    console.log(`Found phone with spaces: +91 ${match[1]} ${match[2]}`);
+    return `${match[1]}${match[2]}`;
+  }
+  
+  // Look for "+91 9880937953" format
+  match = str.match(/\+91\s*(\d{10})/);
+  if (match) {
+    console.log(`Found phone +91: ${match[1]}`);
+    return match[1];
+  }
+  
+  // Look for "98809 37953" (without +91, with space)
+  match = str.match(/\b(\d{5})\s+(\d{5})\b/);
+  if (match) {
+    console.log(`Found phone no +91: ${match[1]}${match[2]}`);
+    return `${match[1]}${match[2]}`;
+  }
+  
+  // Look for 10 digit number directly
+  match = str.match(/\b(\d{10})\b/);
+  if (match) {
+    console.log(`Found 10 digit phone: ${match[1]}`);
+    return match[1];
+  }
+  
+  return '';
 }
 
 /**
@@ -139,34 +210,37 @@ async function addToGoogleSheets(message) {
   try {
     console.log('Starting Google Sheets upload...');
 
-    // Use Claude to extract data
-    const parsedData = await extractDataWithClaude(message);
+    // Smart extract data
+    const parsedData = smartExtractData(message);
 
     const customerName = parsedData.name || 'Unknown';
     const customerPhone = parsedData.phone || '';
-    const type = parsedData.type || 'Tenant';
-    const sheetName = type === 'Owner' ? 'Owner' : 'Tenant';
+    const sheetName = parsedData.type === 'Owner' ? 'Owner' : 'Tenant';
 
-    console.log(`Detected Type: ${type}`);
-    console.log(`Sheet: ${sheetName}`);
-    console.log(`Extracted - Name: ${customerName}, Phone: ${customerPhone}`);
+    console.log(`\n✅ Extracted Data:`);
+    console.log(`   Name: ${customerName}`);
+    console.log(`   Phone: ${customerPhone}`);
+    console.log(`   Type: ${parsedData.type}`);
+    console.log(`   Location: ${parsedData.location}`);
+    console.log(`   Budget: ${parsedData.budgetRent}`);
+    console.log(`   Sheet: ${sheetName}\n`);
 
     // Prepare row data
     const rowData = [
       new Date().toLocaleDateString('en-IN'),
       customerName,
       customerPhone,
-      parsedData.requirement || '',
-      parsedData.configuration || '',
-      parsedData.furnishing || '',
-      parsedData.location || '',
-      parsedData.tenantType || '',
-      parsedData.budgetRent || '',
-      parsedData.budgetDeposit || '',
-      parsedData.moveInDate || '',
-      parsedData.parking || '',
-      parsedData.foodPref || '',
-      parsedData.notes || '',
+      parsedData.requirement,
+      parsedData.configuration,
+      parsedData.furnishing,
+      parsedData.location,
+      parsedData.tenantType,
+      parsedData.budgetRent,
+      parsedData.budgetDeposit,
+      parsedData.moveInDate,
+      parsedData.parking,
+      parsedData.foodPref,
+      parsedData.notes,
     ];
 
     console.log('Row data to insert:', rowData);
@@ -207,9 +281,10 @@ async function sendConfirmation(toPhone, type) {
       to: `whatsapp:${toPhone}`,
       body: confirmationMsg,
     });
-    console.log(`Confirmation sent to ${toPhone}`);
+    console.log(`✅ Confirmation sent to ${toPhone}`);
   } catch (error) {
-    console.error('Error sending confirmation:', error);
+    console.error('Error sending confirmation:', error.message);
+    // Don't throw - continue even if confirmation fails
   }
 }
 
@@ -221,15 +296,17 @@ app.post('/webhook', async (req, res) => {
   const fromPhone = req.body.From.replace('whatsapp:', '');
   const senderName = req.body.ProfileName || 'Unknown';
 
-  console.log(`\n📨 New message from ${senderName} (${fromPhone}):\n${messageBody}\n`);
+  console.log(`\n📨 New message from ${senderName} (${fromPhone}):`);
+  console.log(`\n${messageBody}\n`);
 
   try {
     if (!messageBody || messageBody.trim().length < 5) {
+      console.log('⚠️  Message too short, ignoring');
       res.sendStatus(200);
       return;
     }
 
-    // Extract data using Claude AI
+    // Extract data using smart extraction
     const result = await addToGoogleSheets(messageBody);
 
     // Send confirmation
@@ -238,23 +315,6 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
   } catch (error) {
     console.error('Error processing message:', error);
-    
-    // Send error message to user
-    try {
-      let fromPhone = TWILIO_PHONE;
-      if (fromPhone.startsWith('whatsapp:')) {
-        fromPhone = fromPhone.replace('whatsapp:', '');
-      }
-      
-      await client.messages.create({
-        from: `whatsapp:${fromPhone}`,
-        to: `whatsapp:${fromPhone}`,
-        body: `⚠️ There was an error processing your message. Please try again.`
-      });
-    } catch (sendError) {
-      console.error('Could not send error message:', sendError);
-    }
-    
     res.sendStatus(500);
   }
 });
@@ -263,12 +323,12 @@ app.post('/webhook', async (req, res) => {
  * Health check
  */
 app.get('/health', (req, res) => {
-  res.json({ status: 'Bot is running!', claude: 'enabled' });
+  res.json({ status: 'Bot is running!', extraction: 'smart' });
 });
 
 // Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 WhatsApp bot listening on port ${PORT}`);
-  console.log(`🧠 Claude AI integration: ENABLED`);
+  console.log(`\n🚀 WhatsApp bot listening on port ${PORT}`);
+  console.log(`🧠 Smart extraction: ENABLED (No API calls)\n`);
 });
